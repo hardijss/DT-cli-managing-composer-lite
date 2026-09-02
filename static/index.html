@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ltxq — render queue</title>
+<style>
+:root { --bg:#111418; --card:#1b2027; --edge:#2a313b; --fg:#e6e9ee; --dim:#8b94a3;
+        --acc:#4f9cf9; --ok:#3fb96f; --warn:#e2a63d; --bad:#e05a5a; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--fg);
+       font:14px/1.45 -apple-system, "Segoe UI", sans-serif; }
+main { max-width:1080px; margin:0 auto; padding:20px 16px 60px; }
+h1 { font-size:20px; margin:0 0 2px; }
+h2 { font-size:15px; margin:28px 0 10px; color:var(--dim); text-transform:uppercase;
+     letter-spacing:.06em; }
+.sub { color:var(--dim); font-size:12.5px; }
+.card { background:var(--card); border:1px solid var(--edge); border-radius:10px;
+        padding:14px 16px; margin-bottom:10px; }
+.row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+.grow { flex:1; }
+button { background:var(--acc); color:#fff; border:0; border-radius:7px;
+         padding:7px 14px; font:inherit; cursor:pointer; }
+button.sec { background:#39424f; }
+button.danger { background:var(--bad); }
+button:disabled { opacity:.45; cursor:default; }
+input, select, textarea { background:#141920; color:var(--fg); border:1px solid var(--edge);
+        border-radius:7px; padding:8px 10px; font:inherit; width:100%; }
+textarea { min-height:84px; resize:vertical; }
+label { font-size:12px; color:var(--dim); display:block; margin:10px 0 4px; }
+.bar { height:8px; background:#0d1013; border-radius:4px; overflow:hidden; margin:8px 0 4px; }
+.bar > div { height:100%; background:var(--acc); transition:width 1.5s ease; }
+.pct { font-size:12px; color:var(--dim); }
+.badge { font-size:11px; padding:2px 8px; border-radius:10px; background:#39424f; }
+.badge.done { background:var(--ok); color:#08130c; }
+.badge.running,.badge.collecting { background:var(--acc); color:#0a1626; }
+.badge.failed { background:var(--bad); color:#fff; }
+.badge.cancelled,.badge.suspect { background:var(--warn); color:#241a05; }
+.mono { font-family:ui-monospace, Menlo, monospace; font-size:12px; }
+.note { color:var(--dim); font-size:12px; margin-top:4px; word-break:break-word; }
+table { width:100%; border-collapse:collapse; font-size:12.5px; }
+th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--edge); }
+th { color:var(--dim); font-weight:500; }
+form .grid { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
+#flash { position:fixed; right:16px; top:16px; z-index:5; display:none;
+         max-width:420px; }
+#flash.err { display:block; background:var(--bad); color:#fff; }
+#flash.msg { display:block; background:var(--ok); color:#08130c; }
+a { color:var(--acc); text-decoration:none; }
+.hdr { display:flex; align-items:baseline; gap:10px; margin-bottom:6px; }
+.details summary { cursor:pointer; color:var(--dim); font-size:12px; }
+.qctrl { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:6px; }
+.qctrl input[type=text].rel-input { width:160px; padding:5px 8px; font-size:12px; }
+.qctrl button { padding:5px 10px; font-size:12px; }
+.paused-banner { background:var(--warn); color:#241a05; border-radius:7px;
+                 padding:3px 10px; font-size:12px; font-weight:600; }
+.host-row { margin-bottom:6px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="hdr"><h1>ltxq render queue</h1>
+    <span id="engine" class="badge"></span></div>
+  <div class="sub" id="hosts"></div>
+
+  <h2>Active &amp; queued</h2>
+  <div id="active"></div>
+
+  <h2>New job</h2>
+  <div class="card">
+    <form id="addform">
+    <div class="grid">
+      <div><label>Model</label>
+        <select id="model" required><option value="">loading…</option></select></div>
+      <div><label>Backend / host / ext</label>
+        <div class="row">
+          <select id="backend" style="width:auto">
+            <option value="">default</option><option value="serve">serve</option>
+            <option value="oneshot">oneshot</option></select>
+          <select id="host" style="width:auto">
+            <option value="">auto</option></select>
+          <select id="ext" style="width:auto">
+            <option>mov</option><option>mp4</option><option>png</option></select>
+        </div></div>
+    </div>
+    <label>Prompt</label>
+    <textarea id="prompt" required></textarea>
+    <label>Config JSON (overrides; leave empty to reuse last config)</label>
+    <textarea id="config_json" class="mono" placeholder='{"steps": 9, "seed": 123}'></textarea>
+    <div class="grid">
+      <div><label>Name</label><input id="name" placeholder="optional"></div>
+      <div><label>Seed (empty = keep config / random)</label>
+        <div class="row"><input id="seed" type="number" style="width:120px">
+        <label style="margin:0"><input type="checkbox" id="new_seed"> new seed</label></div>
+      </div>
+    </div>
+    <div class="grid">
+      <div><label>Image (--image)</label><input type="file" id="image"></div>
+      <div><label>Audio (--audio)</label><input type="file" id="audio" accept="audio/*"></div>
+    </div>
+    <div class="grid">
+      <div><label>Input video (--input-video)</label><input type="file" id="input_video"></div>
+      <div><label>First frame (--first-frame)</label><input type="file" id="first_frame"></div>
+    </div>
+    <div class="grid">
+      <div><label>Middle frame (--middle-frame)</label><input type="file" id="middle_frame"></div>
+      <div><label>Last frame (--last-frame)</label><input type="file" id="last_frame"></div>
+    </div>
+    <label>LTX keyframes — image + index (frame number), optional strength:attention
+      (e.g. <span class="mono">12</span> or <span class="mono">12:0.8:1.0</span>)</label>
+    <div id="keyframes"></div>
+    <div class="row" style="margin:6px 0">
+      <button type="button" class="sec" id="addkf">+ keyframe</button>
+      <span class="sub">default strengths:</span>
+      <label style="margin:0">cond
+        <input id="keyframe_strength" placeholder="1.0" style="width:70px"></label>
+      <label style="margin:0">attention
+        <input id="keyframe_attention_strength" placeholder="1.0" style="width:70px"></label>
+    </div>
+
+    <h2 style="margin-top:18px">Frames from a finished video (ffmpeg)</h2>
+    <div class="row">
+      <select id="srcjob" style="flex:1; min-width:180px"></select>
+      <input id="frame" placeholder="frame #, first, last" style="width:130px">
+      <select id="slot" style="width:auto">
+        <option value="first_frame">→ first-frame</option>
+        <option value="middle_frame">→ middle-frame</option>
+        <option value="last_frame">→ last-frame</option>
+        <option value="image">→ image</option>
+        <option value="keyframe">→ keyframe</option>
+      </select>
+      <input id="kf_index" placeholder="kf index" style="width:90px" class="mono">
+      <button type="button" class="sec" id="extract">Extract &amp; attach</button>
+    </div>
+    <div id="staged" class="row" style="margin-top:8px"></div>
+    <div class="row" style="margin-top:14px">
+      <button type="submit">Add to queue</button>
+      <button type="button" class="sec" id="lastcfg">Fill config from last job</button>
+      <span class="sub" id="addmsg"></span>
+    </div>
+    </form>
+  </div>
+
+  <h2>History</h2>
+  <div class="card" style="padding:6px 10px">
+  <table><thead><tr><th>id</th><th>name</th><th>status</th><th>backend</th>
+    <th>pct</th><th>elapsed</th><th>note</th><th></th></tr></thead>
+    <tbody id="hist"></tbody></table>
+  </div>
+</main>
+<div id="flash"></div>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => (s ?? "").toString().replace(/[&<>"]/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = s => { s = Math.max(0, s|0);
+  return s >= 3600 ? `${s/3600|0}h${(s%3600)/60|0}m` : s >= 60 ? `${s/60|0}m${s%60}s` : `${s}s`; };
+
+function flash(msg, err) {
+  const f = $("flash"); f.textContent = msg; f.className = err ? "err" : "msg";
+  clearTimeout(f._t); f._t = setTimeout(() => f.className = "", err ? 8000 : 3000);
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+const ACTIVE = ["queued","uploading","running","suspect","cancelling","collecting"];
+const openDetails = new Set();
+
+function render(d) {
+  document.querySelectorAll("details[data-details-key]").forEach(el => {
+    if (el.open) openDetails.add(el.dataset.detailsKey);
+    else openDetails.delete(el.dataset.detailsKey);
+  });
+
+  $("engine").textContent = d.engine ? "engine running" : "engine stopped";
+  $("engine").style.background = d.engine ? "var(--ok)" : "var(--warn)";
+
+  const activeEl = document.activeElement;
+  const activeId = activeEl && activeEl.id;
+  const selStart = activeEl && typeof activeEl.selectionStart === "number" ? activeEl.selectionStart : null;
+  const selEnd = activeEl && typeof activeEl.selectionEnd === "number" ? activeEl.selectionEnd : null;
+  const savedRelValues = {};
+  document.querySelectorAll(".rel-input").forEach(inp => {
+    if (inp.id) savedRelValues[inp.id] = inp.value;
+  });
+
+  $("hosts").innerHTML = d.hosts.map(h => {
+    const idle = h.idle || {};
+    const live = [];
+    if (h.in_flight !== undefined)
+      live.push(`${h.in_flight} in flight${h.queued ? `, ${h.queued} queued` : ""}`);
+    live.push(h.worker_alive ? "worker up" : "worker down");
+    const connInfo = `${esc(h.conn||"ssh")}${h.cli_path ? " · " + esc(h.cli_path) : ""}`;
+
+    let pausedBit = "";
+    if (h.paused) {
+      if (h.release_at) {
+        const secsLeft = Math.max(0, h.release_at - (d.now || Math.floor(Date.now()/1000)));
+        const hh = (secsLeft/3600|0), mm = ((secsLeft%3600)/60|0), ss = secsLeft%60;
+        const countdown = hh ? `${hh}h ${mm}m` : mm ? `${mm}m ${ss}s` : `${ss}s`;
+        pausedBit = `<span class="paused-banner">⏸ dispatch paused — releases in ${countdown}</span>`;
+      } else {
+        pausedBit = `<span class="paused-banner">⏸ dispatch paused</span>`;
+      }
+    }
+    if (idle.busy)
+      pausedBit += ` <b style="color:var(--warn)">idle-policy: ${esc(idle.reason)}</b>`;
+
+    return `<div class="host-row">
+      <div class="row">
+        <b>${esc(h.alias)}</b>
+        <span class="sub">(${connInfo})</span>
+        <span class="${h.worker_alive ? "" : "sub"}">${esc(live.join(" · "))}</span>
+        ${pausedBit}
+      </div>
+      <div class="qctrl">
+        <button class="sec" data-pause="${esc(h.alias)}" ${h.paused ? "disabled" : ""}>⏸ Pause</button>
+        <button data-resume="${esc(h.alias)}" ${h.paused ? "" : "disabled"}>▶ Resume</button>
+        <span class="sub">Schedule release:</span>
+        <input type="text" class="rel-input mono" id="rel-${esc(h.alias)}" placeholder="22:00 or +2h" style="width:140px">
+        <button class="sec" data-schedule="${esc(h.alias)}">Set &amp; pause</button>
+      </div>
+    </div>`;
+  }).join("<hr style='border-color:var(--edge);margin:6px 0'>");
+
+  Object.keys(savedRelValues).forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = savedRelValues[id];
+  });
+  if (activeId && document.getElementById(activeId)) {
+    const el = document.getElementById(activeId);
+    el.focus();
+    if (selStart !== null && selEnd !== null && typeof el.setSelectionRange === "function") {
+      try { el.setSelectionRange(selStart, selEnd); } catch (e) {}
+    }
+  }
+
+  document.querySelectorAll("[data-pause]").forEach(b =>
+    b.onclick = async () => {
+      try { await api(`/api/queue/${b.dataset.pause}/pause`, {method:"POST"});
+            flash("dispatch paused for " + b.dataset.pause); refresh(); }
+      catch (e) { flash(e.message, true); }
+    });
+  document.querySelectorAll("[data-resume]").forEach(b =>
+    b.onclick = async () => {
+      try { await api(`/api/queue/${b.dataset.resume}/resume`, {method:"POST"});
+            flash("dispatch resumed for " + b.dataset.resume); refresh(); }
+      catch (e) { flash(e.message, true); }
+    });
+  function parseReleaseTime(v) {
+    v = (v || "").trim();
+    if (!v) return null;
+    const relMatch = v.match(/^\+?(\d+)\s*(h|m|s|min|hour|hours|minute|minutes)$/i);
+    if (relMatch) {
+      const num = parseInt(relMatch[1], 10);
+      const unit = relMatch[2].toLowerCase()[0];
+      let mult = 60;
+      if (unit === 'h') mult = 3600;
+      else if (unit === 's') mult = 1;
+      return Math.floor(Date.now() / 1000) + num * mult;
+    }
+    const timeMatch = v.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (timeMatch) {
+      const d = new Date();
+      d.setHours(parseInt(timeMatch[1], 10), parseInt(timeMatch[2], 10), parseInt(timeMatch[3] || "0", 10), 0);
+      if (d.getTime() <= Date.now()) {
+        d.setDate(d.getDate() + 1);
+      }
+      return Math.floor(d.getTime() / 1000);
+    }
+    let t = Date.parse(v);
+    if (isNaN(t)) t = Date.parse(v.replace(" ", "T"));
+    if (isNaN(t)) return null;
+    return Math.floor(t / 1000);
+  }
+
+  document.querySelectorAll("[data-schedule]").forEach(b => {
+    b.onclick = async () => {
+      const alias = b.dataset.schedule;
+      const inp = document.getElementById("rel-" + alias);
+      if (!inp || !inp.value.trim()) { flash("enter a release time (e.g. 22:00, +2h, or 2026-09-02 22:00)", true); return; }
+      const epoch = parseReleaseTime(inp.value);
+      if (!epoch || epoch <= Math.floor(Date.now()/1000))
+        { flash("release time must be in the future (format: 22:00, +2h, or 2026-09-02 22:00)", true); return; }
+      try {
+        await api(`/api/queue/${alias}/pause`, {method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({release_at: epoch})});
+        flash(`${alias}: paused, release scheduled`); inp.value=""; refresh();
+      } catch (e) { flash(e.message, true); }
+    };
+  });
+
+  const act = d.jobs.filter(j => ACTIVE.includes(j.status));
+  $("active").innerHTML = act.length ? "" : '<div class="sub">nothing in flight</div>';
+  for (const j of act) {
+    const el = document.createElement("div"); el.className = "card";
+    el.innerHTML = `
+      <div class="row">
+        <b>${esc(j.name)}</b> <span class="mono sub">${esc(j.id)}</span>
+        <span class="badge ${esc(j.status)}">${esc(j.status)}</span>
+        <span class="badge">${esc(j.backend||"-")} / ${esc(j.host||"-")}</span>
+        <span class="grow"></span>
+        <span class="pct">${j.bar}% · ${fmt(j.elapsed)}</span>
+        <button class="danger" data-cancel="${esc(j.id)}">Cancel</button>
+      </div>
+      <div class="bar"><div style="width:${j.bar}%"></div></div>
+      ${j.steps ? `<div class="pct">step progress may exceed raw % · steps: ${j.steps}
+        ${j.step_avg_s ? `· avg ${j.step_avg_s}s/step` : ""}</div>` : ""}
+      ${j.note ? `<div class="note">${esc(j.note)}</div>` : ""}
+      <details class="details" data-details-key="log-${esc(j.id)}" ${openDetails.has("log-" + j.id) ? "open" : ""} ontoggle="this.open ? openDetails.add('log-${esc(j.id)}') : openDetails.delete('log-${esc(j.id)}')"><summary>log tail</summary>
+        <pre class="mono" style="white-space:pre-wrap">${esc(j.log_tail||"")}</pre></details>`;
+    $("active").appendChild(el);
+  }
+  document.querySelectorAll("[data-cancel]").forEach(b =>
+    b.onclick = async () => {
+      if (!confirm("Cancel job " + b.dataset.cancel + "?")) return;
+      try { await api(`/api/cancel/${b.dataset.cancel}`, {method:"POST"});
+            flash("cancel requested"); refresh(); }
+      catch (e) { flash(e.message, true); }
+    });
+
+  $("hist").innerHTML = d.jobs
+    .filter(j => !ACTIVE.includes(j.status))
+    .map(j => {
+      const assets = (() => { try { return JSON.parse(j.assets || "[]"); }
+                              catch (e) { return []; } })();
+      const inputs = assets.length
+        ? `<details class="details" data-details-key="in-${esc(j.id)}" ${openDetails.has("in-" + j.id) ? "open" : ""} ontoggle="this.open ? openDetails.add('in-${esc(j.id)}') : openDetails.delete('in-${esc(j.id)}')"><summary>inputs (${assets.length})</summary>` +
+          assets.map(a => {
+            const ext = (a.file.split('.').pop() || '').toLowerCase();
+            const isImg = ["png", "jpg", "jpeg", "webp", "gif"].includes(ext);
+            const isAud = ["mp3", "wav", "m4a", "aac", "flac", "ogg"].includes(ext);
+            if (isImg) {
+              return `<a href="/api/asset/${esc(j.id)}/${esc(a.file)}" target="_blank"><img src="/api/asset/${esc(j.id)}/${esc(a.file)}" title="${esc(a.flag || "upload")} · ${esc(a.file)}" style="height:44px;border-radius:4px;margin:3px"></a>`;
+            } else if (isAud) {
+              return `<a href="/api/asset/${esc(j.id)}/${esc(a.file)}" target="_blank" style="display:inline-flex;align-items:center;gap:4px;background:#2a313b;padding:3px 8px;border-radius:4px;margin:3px;font-size:11px" title="${esc(a.flag || "upload")} · ${esc(a.file)}">🎵 ${esc(a.flag || "audio")}: ${esc(a.file)}</a>`;
+            } else {
+              return `<a href="/api/asset/${esc(j.id)}/${esc(a.file)}" target="_blank" style="display:inline-flex;align-items:center;gap:4px;background:#2a313b;padding:3px 8px;border-radius:4px;margin:3px;font-size:11px" title="${esc(a.flag || "upload")} · ${esc(a.file)}">📁 ${esc(a.flag || "file")}: ${esc(a.file)}</a>`;
+            }
+          }).join("") +
+          `</details>`
+        : "";
+      return `<tr>
+      <td class="mono">${esc(j.id)}</td>
+      <td>${esc(j.name)}${inputs}</td>
+      <td><span class="badge ${esc(j.status)}">${esc(j.status)}</span></td>
+      <td>${esc(j.backend||"-")}</td>
+      <td>${j.pct}%</td><td>${fmt(j.elapsed)}</td>
+      <td class="note">${esc((j.note||"") + (j.local_out ? " · " + j.local_out : ""))}</td>
+      <td><a href="/api/view/${esc(j.id)}" target="_blank">View</a>
+          <button class="sec" data-load="${esc(j.id)}">Load</button>
+          <button class="danger" data-del="${esc(j.id)}">✕</button></td>
+    </tr>`; }).join("");
+  document.querySelectorAll("[data-load]").forEach(b =>
+    b.onclick = async () => {
+      try {
+        const j = (await api("/api/job/" + b.dataset.load)).job;
+        $("prompt").value = j.prompt || "";
+        const cfg = JSON.parse(j.config_text || "{}"); delete cfg.seed;
+        $("config_json").value = JSON.stringify(cfg, null, 2);
+        $("name").value = j.name || "";
+        const sel = [...$("model").options].find(o => o.value === j.model);
+        if (sel) $("model").value = j.model;
+        if (j.backend) $("backend").value = j.backend;
+        if (j.host) $("host").value = j.host;
+        if (j.ext) $("ext").value = j.ext;
+        // re-attach this job's input files via the staging area
+        let assets = [];
+        try { assets = JSON.parse(j.assets || "[]"); } catch (e) {}
+        const extraToks = (() => { try { return JSON.parse(j.extra_args || "[]"); }
+                                   catch (e) { return []; } })();
+        staged.length = 0;
+        const SLOT = {"--image": "image", "--audio": "audio", "--input-video": "input_video",
+                      "--first-frame": "first_frame", "--middle-frame": "middle_frame",
+                      "--last-frame": "last_frame"};
+        for (const a of assets) {
+          if (SLOT[a.flag]) {
+            const r = await api(`/api/stage_from/${j.id}/${a.file}`, {method:"POST"});
+            staged.push({slot: SLOT[a.flag], name: r.staged});
+          } else if (!a.flag) {
+            const ki = extraToks.indexOf("--keyframe");
+            if (ki >= 0 && extraToks[ki + 1] && extraToks[ki + 1].includes("@" + a.file + "@")) {
+              const spec = extraToks[ki + 1].split("@").pop().replace(/^:/, "");
+              const parts = spec.split(":");
+              const r = await api(`/api/stage_from/${j.id}/${a.file}`, {method:"POST"});
+              staged.push({slot: "keyframe", name: r.staged, index: parts[0] || "0"});
+              if (parts[1]) $("keyframe_strength").value = parts[1];
+              if (parts[2]) $("keyframe_attention_strength").value = parts[2];
+            } else {
+              const r = await api(`/api/stage_from/${j.id}/${a.file}`, {method:"POST"});
+              staged.push({slot: "upload", name: r.staged});
+            }
+          }
+        }
+        renderStaged();
+        window.scrollTo({top: 0, behavior: "smooth"});
+        flash("loaded " + j.id + " into the form — edit then Add to queue");
+      } catch (e) { flash(e.message, true); }
+    });
+  document.querySelectorAll("[data-del]").forEach(b =>
+    b.onclick = async () => {
+      if (!confirm("Delete job " + b.dataset.del + " from history?\n"
+        + "(work files removed — the collected video in ~/Movies/generations is kept)")) return;
+      try { await api(`/api/delete/${b.dataset.del}`, {method:"POST"});
+            flash("deleted"); refresh(); }
+      catch (e) { flash(e.message, true); }
+    });
+  const vids = d.jobs.filter(j => j.status === "done" && j.local_out);
+  const cur = $("srcjob").value;
+  $("srcjob").innerHTML = vids.map(j =>
+    `<option value="${esc(j.id)}">${esc(j.name)} (${esc(j.id)})</option>`).join("")
+    || '<option value="">no finished videos yet</option>';
+  if (cur && vids.some(j => j.id === cur)) $("srcjob").value = cur;
+}
+
+const staged = [];   // {slot, name}
+function addKfRow() {
+  const row = document.createElement("div"); row.className = "row";
+  row.innerHTML = `<input type="file" accept="image/*" style="flex:1">
+    <input type="text" class="mono" placeholder="index[:strength[:att]] e.g. 12:0.8"
+           style="width:190px">
+    <button type="button" class="sec">✕</button>`;
+  row.querySelector("button").onclick = () => row.remove();
+  $("keyframes").appendChild(row);
+}
+addKfRow();
+$("addkf").onclick = addKfRow;
+function renderStaged() {
+  $("staged").innerHTML = staged.map((s, i) => {
+    const ext = (s.name.split('.').pop() || '').toLowerCase();
+    const isImg = ["png", "jpg", "jpeg", "webp", "gif"].includes(ext);
+    const thumb = isImg ? `<img src="/api/stage/${esc(s.name)}" width="44" style="border-radius:4px">` : `<span class="badge">🎵/📁 file</span>`;
+    return `<span class="badge">${esc(s.slot === "upload" ? "upload" : s.slot)}${s.index ? " #" + esc(s.index) : ""} · ${esc(s.name.split("_").slice(2).join("_"))}</span>
+     ${thumb}
+     <button type="button" class="sec" data-unstage="${i}">✕</button>`;
+  }).join("");
+  document.querySelectorAll("[data-unstage]").forEach(b =>
+    b.onclick = () => { staged.splice(+b.dataset.unstage, 1); renderStaged(); });
+}
+$("extract").onclick = async () => {
+  if (!$("srcjob").value) return flash("no finished video selected", true);
+  try {
+    const r = await api("/api/extract", {method:"POST", headers:
+      {"Content-Type": "application/json"},
+      body: JSON.stringify({jid: $("srcjob").value, frame: $("frame").value || "first"})});
+    staged.push({slot: $("slot").value,
+                 index: $("slot").value === "keyframe" ? ($("kf_index").value || "0") : null,
+                 name: r.staged});
+    renderStaged();
+    flash(`extracted frame ${r.frame} → attached as ${$("slot").value}`);
+  } catch (e) { flash(e.message, true); }
+};
+
+async function refresh() {
+  try { render(await api("/api/state")); } catch (e) { flash(e.message, true); }
+}
+refresh(); setInterval(refresh, 2000);
+
+async function loadModels(alias) {
+  try {
+    const st = await api("/api/state");
+    if (!alias) {
+      const h = st.hosts[0]; if (h) alias = h.alias;
+    }
+    $("host").innerHTML = '<option value="">auto (hosts.yaml order)</option>' +
+      st.hosts.map(h => `<option>${esc(h.alias)}</option>`).join("");
+  } catch (e) {}
+  try {
+    const m = await api("/api/models/" + (alias || "ltx-a"));
+    $("model").innerHTML = m.models.map(x =>
+      `<option value="${esc(x.model)}">${esc(x.name)}</option>`).join("")
+      || '<option value="">none downloaded</option>';
+    if (m.error) $("addmsg").textContent = "models: " + m.error;
+  } catch (e) { $("addmsg").textContent = e.message; }
+}
+loadModels();
+$("host").onchange = () => loadModels($("host").value);
+
+$("lastcfg").onclick = async () => {
+  try {
+    const st = await api("/api/state");
+    const last = st.jobs.find(j => j.status === "done");
+    if (!last) return flash("no completed job yet", true);
+    const j = await api("/api/job/" + last.id);
+    const cfg = JSON.parse(j.job.config_text || "{}");
+    delete cfg.seed;
+    $("config_json").value = JSON.stringify(cfg, null, 2);
+    $("prompt").value = j.job.prompt || "";
+    flash("filled from " + last.id);
+  } catch (e) { flash(e.message, true); }
+};
+
+$("addform").onsubmit = async ev => {
+  ev.preventDefault();
+  const fd = new FormData();
+  fd.set("model", $("model").value);
+  fd.set("prompt", $("prompt").value);
+  fd.set("config_json", $("config_json").value || "");
+  if ($("name").value)  fd.set("name", $("name").value);
+  if ($("seed").value)  fd.set("seed", $("seed").value);
+  if ($("new_seed").checked) fd.set("new_seed", "1");
+  if ($("backend").value) fd.set("backend", $("backend").value);
+  if ($("host").value)    fd.set("host", $("host").value);
+  fd.set("ext", $("ext").value);
+  for (const id of ["image", "audio", "input_video", "first_frame", "middle_frame",
+                    "last_frame"])
+    if ($(id).files[0]) fd.set(id, $(id).files[0]);
+  const kfRows = [...document.querySelectorAll("#keyframes .row")];
+  kfRows.forEach((row, i) => {
+    const f = row.querySelector("input[type=file]");
+    const spec = row.querySelector("input[type=text]");
+    if (f && f.files[0] && spec) {
+      fd.set("keyframe_file", f.files[0]);
+      fd.append("keyframe_spec", spec.value || "0");
+    }
+  });
+  for (const s of staged) {
+    if (s.slot === "keyframe") {
+      fd.set("staged_keyframe", s.name);
+      fd.set("keyframe_index", s.index || "0");
+    } else if (s.slot === "upload") {
+      fd.append("staged_upload", s.name);
+    } else fd.set("staged_" + s.slot, s.name);
+  }
+  try {
+    const r = await api("/api/add", {method:"POST", body:fd});
+    flash("queued " + r.jid); refresh();
+  } catch (e) { flash(e.message, true); }
+};
+</script>
+</body>
+</html>

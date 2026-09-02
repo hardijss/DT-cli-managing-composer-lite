@@ -1,0 +1,39 @@
+cli_path: ~/tod-dt-cli
+poll_secs: 10
+stall_secs: 900
+remote_root: genwork
+movies_dir: ~/Movies/generations
+use_pty: true
+keep_remote: false
+download_missing: false
+disable_preview: true
+offline: false
+# Routing: dispatch walks hosts top-to-bottom; a job without --host goes to
+# the first enabled host with free capacity. List order = preference order.
+# Per-host cli_path overrides the global cli_path above (different binary or
+# version per machine); conn_type / models_dir / idle_policy are per-host too.
+hosts:
+  - alias: ltx-a
+    dest: user@192.168.0.10
+    max_jobs: 1
+    # cli_path: ~/tod-dt-cli   # uncomment to use a different binary on ltx-a
+    models_dir: /path/to/models
+    # idle consumer: local workload on the render host takes precedence
+    idle_policy:
+      enabled: false
+      max_load: 8.0          # skip dispatch when 1-min load exceeds this
+      heavy_processes:       # or when any of these run on the host
+        - Premiere
+        - After Effects
+        - Media Encoder
+        - DaVinci
+        - Resolve
+        - Blender
+      pause_release_secs: 300  # busy this long -> serve-stop to free model RAM
+  # this machine, no ssh. CANNOT run tod-cli generation (limited hardware) —
+  # enable only to test queue/UI/transport manually.
+  - alias: local
+    conn_type: local
+    dest: local
+    max_jobs: 1
+    enabled: false

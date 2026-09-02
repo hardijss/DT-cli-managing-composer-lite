@@ -1,0 +1,20 @@
+# Runtime state
+engine.lock
+*.db
+*.db-shm
+*.db-wal
+
+# Job payloads (prompts, generated media, runner scripts)
+jobs/
+
+# Local / sensitive config
+hosts.yaml
+.ssh_mux/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
