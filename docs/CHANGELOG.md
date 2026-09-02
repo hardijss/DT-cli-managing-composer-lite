@@ -4,6 +4,9 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
 
 ## [Unreleased] - 2026-09-02
 
+### Repo
+- **GitHub setup**: Prepared the repository for GitHub (`hardijss/DT-cli-managing-composer-lite`, private): added `.gitignore`, `hosts.yaml.example`, `requirements.txt`, and a top-level `README.md`. The database, `jobs/` payloads, `venv/`, and the real `hosts.yaml` are excluded from version control.
+
 ### Docs
 - **`docs/features.md`**: Added audio attachment support, staging GC / worker-log rotation, and per-host queue pause/resume (with timed release) to the feature list, matching the current code.
 
