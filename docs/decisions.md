@@ -84,3 +84,13 @@ so Load-before-Delete is the documented safety net.
 Regen-as-submit duplicated a job verbatim — near-useless for a stochastic
 generator. Replaced with Load: populate the form (prompt, config, model,
 backend, inputs re-attached via staging) for editing before submission.
+
+## 14. Chain continuation resolves at launch, omits gracefully
+The continuation checkbox is stored on the job (`chain` slot), not resolved in
+the web form, so batches can be queued while earlier segments still render:
+at claim time the engine extracts the last frame of the newest finished
+generation and attaches it to the slot. A missing source (first job, deleted
+output, ffmpeg failure) or a slot already filled manually never fails the
+render — the job runs without the frame and the note says why. Parallel hosts
+claiming flagged jobs in the same instant both continue from the same
+predecessor; chains assume serial execution (`max_jobs` 1 per host).

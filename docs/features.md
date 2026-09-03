@@ -21,6 +21,11 @@
   validation errors annotated, upload failures requeue
 - Audio input support: `--audio` attachment accepted on the web form, carried
   through staging and regen (Load) like other assets
+- Generation chain: jobs flagged with `chain` (first_frame/image slot) resolve
+  at launch — the last frame of the newest finished render is extracted
+  (ffmpeg) and attached to that slot, so queued batches continue from each
+  other; missing source or a manually-filled slot degrades to running without
+  the frame (noted), never failing the render
 - Housekeeping: staging artifacts in `jobs/_tmp/` older than 24h pruned;
   remote `worker.log` rotated when it exceeds 10MB (during idle periods) —
   runs in the engine loop and `run`/`reconcile`
@@ -34,6 +39,9 @@
   `index[:strength[:attention]]`, default strengths
 - ffmpeg frame extraction: pick a finished video + frame #/first/last →
   staged thumbnail → attach as any slot or keyframe
+- Chain continuation checkbox: auto-attach the previous generation's last
+  frame as first-frame/image (resolved when the job launches, so batches
+  chain); state remembered between submissions; ⛓ badge on chained jobs
 - History: status badges, input thumbnails, View (opens video), Load
   (populates the whole form incl. re-attaching past inputs), Delete
   (record + work files; collected video kept)
@@ -61,6 +69,9 @@
 - Delete removes input copies with the record (by design, but easy to regret;
   Load-before-delete is the mitigation).
 - Remote host going away mid-job → `failed: process gone`; no auto-retry.
+- Chain continuation assumes serial execution: with several hosts dispatching
+  in parallel, two flagged jobs claimed in the same instant both continue from
+  the same predecessor.
 
 ## TODOs / ideas
 

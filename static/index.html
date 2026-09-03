@@ -118,6 +118,15 @@ a { color:var(--acc); text-decoration:none; }
         <input id="keyframe_attention_strength" placeholder="1.0" style="width:70px"></label>
     </div>
 
+    <div class="row" style="margin:10px 0 6px">
+      <label style="margin:0"><input type="checkbox" id="chain"> Continue from
+        previous generation <span class="sub">(auto-attach its last frame)</span></label>
+      <select id="chain_slot" style="width:auto">
+        <option value="first_frame">as first-frame</option>
+        <option value="image">as image</option>
+      </select>
+    </div>
+
     <h2 style="margin-top:18px">Frames from a finished video (ffmpeg)</h2>
     <div class="row">
       <select id="srcjob" style="flex:1; min-width:180px"></select>
@@ -305,6 +314,7 @@ function render(d) {
         <b>${esc(j.name)}</b> <span class="mono sub">${esc(j.id)}</span>
         <span class="badge ${esc(j.status)}">${esc(j.status)}</span>
         <span class="badge">${esc(j.backend||"-")} / ${esc(j.host||"-")}</span>
+        ${j.chain ? `<span class="badge" title="continuation: last frame of the previous generation">⛓ ${esc(j.chain)}</span>` : ""}
         <span class="grow"></span>
         <span class="pct">${j.bar}% · ${fmt(j.elapsed)}</span>
         <button class="danger" data-cancel="${esc(j.id)}">Cancel</button>
@@ -348,7 +358,7 @@ function render(d) {
         : "";
       return `<tr>
       <td class="mono">${esc(j.id)}</td>
-      <td>${esc(j.name)}${inputs}</td>
+      <td>${j.chain ? `<span class="badge" title="continuation: last frame of the previous generation attached as ${esc(j.chain)}">⛓</span> ` : ""}${esc(j.name)}${inputs}</td>
       <td><span class="badge ${esc(j.status)}">${esc(j.status)}</span></td>
       <td>${esc(j.backend||"-")}</td>
       <td>${j.pct}%</td><td>${fmt(j.elapsed)}</td>
@@ -370,6 +380,14 @@ function render(d) {
         if (j.backend) $("backend").value = j.backend;
         if (j.host) $("host").value = j.host;
         if (j.ext) $("ext").value = j.ext;
+        $("chain").checked = !!j.chain;
+        if (j.chain) {
+          $("chain_slot").value = j.chain;
+          localStorage.setItem("ltxq.chain", "1");
+          localStorage.setItem("ltxq.chain_slot", j.chain);
+        } else {
+          localStorage.setItem("ltxq.chain", "0");
+        }
         // re-attach this job's input files via the staging area
         let assets = [];
         try { assets = JSON.parse(j.assets || "[]"); } catch (e) {}
@@ -420,6 +438,11 @@ function render(d) {
 }
 
 const staged = [];   // {slot, name}
+// chain continuation controls: remember between submissions (localStorage)
+if (localStorage.getItem("ltxq.chain") === "1") $("chain").checked = true;
+if (localStorage.getItem("ltxq.chain_slot")) $("chain_slot").value = localStorage.getItem("ltxq.chain_slot");
+$("chain").onchange = () => localStorage.setItem("ltxq.chain", $("chain").checked ? "1" : "0");
+$("chain_slot").onchange = () => localStorage.setItem("ltxq.chain_slot", $("chain_slot").value);
 function addKfRow() {
   const row = document.createElement("div"); row.className = "row";
   row.innerHTML = `<input type="file" accept="image/*" style="flex:1">
@@ -505,6 +528,10 @@ $("addform").onsubmit = async ev => {
   if ($("name").value)  fd.set("name", $("name").value);
   if ($("seed").value)  fd.set("seed", $("seed").value);
   if ($("new_seed").checked) fd.set("new_seed", "1");
+  if ($("chain").checked) {
+    fd.set("chain", $("chain_slot").value);
+    localStorage.setItem("ltxq.chain_slot", $("chain_slot").value);
+  }
   if ($("backend").value) fd.set("backend", $("backend").value);
   if ($("host").value)    fd.set("host", $("host").value);
   fd.set("ext", $("ext").value);

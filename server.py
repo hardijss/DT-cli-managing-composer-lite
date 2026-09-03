@@ -2,7 +2,7 @@
 
 Run: ./venv/bin/python ltxq.py ui [--port 8765] [--no-engine]
 """
-import argparse, contextlib, io, json, shlex, subprocess, threading, time
+import argparse, contextlib, io, json, shlex, threading, time
 from pathlib import Path
 
 import flask
@@ -262,6 +262,9 @@ def api_add():
     model = f.get("model") or ""
     if not model:
         return flask.jsonify(error="model is required"), 400
+    chain = f.get("chain") or None
+    if chain not in (None, "first_frame", "image"):
+        return flask.jsonify(error="chain must be 'first_frame' or 'image'"), 400
     tmp = HERE / "jobs" / "_tmp"; tmp.mkdir(parents=True, exist_ok=True)
     prompt_file = tmp / f"prompt_{int(time.time()*1000)}.txt"
     prompt_file.write_text(prompt)
@@ -286,7 +289,7 @@ def api_add():
         host=f.get("host") or None, name=f.get("name") or None,
         parent=None, seed=int(f["seed"]) if f.get("seed") else None,
         new_seed=bool(f.get("new_seed")), ext=f.get("ext") or "mov",
-        backend=f.get("backend") or None,
+        backend=f.get("backend") or None, chain=chain,
         **{attr: None for attr, _ in ltxq.FLAGMAP},
         upload=[], extra_arg=[ea for ea in (f.get("extra_arg") or "").splitlines()
                               if ea.strip()])
@@ -342,14 +345,6 @@ def api_add():
 
 STAGE = HERE / "jobs" / "_tmp"
 
-def _video_of(j):
-    out = Path(j["local_out"] or "")
-    if not out.is_dir():
-        return None
-    vids = sorted(out.glob("*.mov")) + sorted(out.glob("*.mp4"))
-    return str(vids[0]) if vids else None
-
-
 def _staged_ok(p):
     p = Path(p)
     return p.exists() and p.parent == STAGE and p.name.startswith("stage_")
@@ -361,7 +356,7 @@ def api_view(jid):
     j = con.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
     if not j or j["status"] != "done":
         return "no collected video for this job", 404
-    v = _video_of(j)
+    v = ltxq.video_of(j)
     if not v:
         return "no video file found", 404
     return flask.send_file(v)
@@ -374,31 +369,18 @@ def api_extract():
     j = con.execute("SELECT * FROM jobs WHERE id=?", (d.get("jid", ""),)).fetchone()
     if not j or j["status"] != "done":
         return flask.jsonify(error="job is not done / not found"), 400
-    v = _video_of(j)
+    v = ltxq.video_of(j)
     if not v:
         return flask.jsonify(error="no video in output dir"), 400
     STAGE.mkdir(parents=True, exist_ok=True)
-    fr = str(d.get("frame", "")).strip()
-    if fr == "first":
-        n = 0
-    elif fr == "last":
-        pr = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
-                             "-count_frames", "-show_entries",
-                             "stream=nb_read_frames", "-of", "csv=p=0", v],
-                            capture_output=True, text=True, timeout=120)
-        try: n = max(0, int(pr.stdout.strip()) - 1)
-        except ValueError:
-            return flask.jsonify(error="ffprobe failed: " + pr.stderr[-150:]), 400
-    elif not fr.isdigit():
-        return flask.jsonify(error="frame must be a number, 'first' or 'last'"), 400
-    else:
-        n = int(fr)
-    dst = STAGE / f"stage_{int(time.time()*1000)}_{j['id']}_f{n}.png"
-    r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", v,
-                        "-vf", f"select=eq(n\\,{n})", "-frames:v", "1", str(dst)],
-                       capture_output=True, text=True, timeout=120)
-    if r.returncode != 0 or not dst.exists():
-        return flask.jsonify(error="ffmpeg: " + (r.stderr[-200:] or "no output")), 400
+    tmp = STAGE / f"stage_{int(time.time()*1000)}_{j['id']}.tmp.png"
+    try:
+        n = ltxq.extract_frame(v, str(d.get("frame", "")).strip(), tmp)
+    except (RuntimeError, ValueError) as e:
+        tmp.unlink(missing_ok=True)
+        return flask.jsonify(error=str(e)), 400
+    dst = tmp.with_name(f"stage_{int(time.time()*1000)}_{j['id']}_f{n}.png")
+    tmp.rename(dst)
     return flask.jsonify(staged=dst.name, frame=n,
                          preview="/api/stage/" + dst.name)
 

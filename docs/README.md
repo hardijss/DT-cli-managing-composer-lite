@@ -20,6 +20,9 @@ jobs, extract frames from finished videos with ffmpeg, and manage history.
 - **Live progress**: percent, step counts/timing, phase; stall detection
   (`stall_secs`); cancel (oneshot kills the process; serve runs to completion
   and discards).
+- **Chain continuation**: flag a job to auto-attach the last frame of the
+  previous finished generation as its image/first-frame (resolved at launch,
+  so queued batches continue from each other).
 - **Collection**: outputs rsynced (or copied for local hosts) to
   `~/Movies/generations/<name>-<id>/` with `metadata.json` (full job record +
   sha256 + size). Remote work dirs cleaned unless `keep_remote`.

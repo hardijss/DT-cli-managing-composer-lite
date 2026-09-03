@@ -2,6 +2,11 @@
 
 All notable changes, bug fixes, and feature additions to `ltxq` are documented here.
 
+## [Unreleased] - 2026-09-03
+
+### Added
+- **Generation chain / continuation (`ltxq.py`, `server.py`, `static/index.html`)**: New "Continue from previous generation" checkbox with a first-frame/image slot picker on the web form (CLI: `add --chain {first_frame,image}`). Flagged jobs resolve at launch time: the engine extracts the last frame of the most recently finished generation and attaches it as `--first-frame` or `--image`, so batches of segments can be queued while earlier segments are still rendering and each continues from the one before. A missing source (no finished job, deleted video, ffmpeg failure) or a slot already filled manually degrades to running without the frame, with an explanatory note — the render is never failed over the chain. The ffprobe/ffmpeg extraction moved into a shared `ltxq.extract_frame()` (now also backing `/api/extract`); new `jobs.chain` column (auto-migrated); ⛓ badge marks chained jobs in the dashboard, checkbox state is remembered between submissions.
+
 ## [Unreleased] - 2026-09-02
 
 ### Repo
