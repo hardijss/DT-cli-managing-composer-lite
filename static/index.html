@@ -347,11 +347,11 @@ function render(d) {
             const isImg = ["png", "jpg", "jpeg", "webp", "gif"].includes(ext);
             const isAud = ["mp3", "wav", "m4a", "aac", "flac", "ogg"].includes(ext);
             if (isImg) {
-              return `<a href="/api/asset/${esc(j.id)}/${esc(a.file)}" target="_blank"><img src="/api/asset/${esc(j.id)}/${esc(a.file)}" title="${esc(a.flag || "upload")} · ${esc(a.file)}" style="height:44px;border-radius:4px;margin:3px"></a>`;
+              return `<a href="/api/asset/${esc(j.id)}/${encodeURIComponent(a.file)}" target="_blank"><img src="/api/asset/${esc(j.id)}/${encodeURIComponent(a.file)}" title="${esc(a.flag || "upload")} · ${esc(a.file)}" style="height:44px;border-radius:4px;margin:3px"></a>`;
             } else if (isAud) {
-              return `<a href="/api/asset/${esc(j.id)}/${esc(a.file)}" target="_blank" style="display:inline-flex;align-items:center;gap:4px;background:#2a313b;padding:3px 8px;border-radius:4px;margin:3px;font-size:11px" title="${esc(a.flag || "upload")} · ${esc(a.file)}">🎵 ${esc(a.flag || "audio")}: ${esc(a.file)}</a>`;
+              return `<a href="/api/asset/${esc(j.id)}/${encodeURIComponent(a.file)}" target="_blank" style="display:inline-flex;align-items:center;gap:4px;background:#2a313b;padding:3px 8px;border-radius:4px;margin:3px;font-size:11px" title="${esc(a.flag || "upload")} · ${esc(a.file)}">🎵 ${esc(a.flag || "audio")}: ${esc(a.file)}</a>`;
             } else {
-              return `<a href="/api/asset/${esc(j.id)}/${esc(a.file)}" target="_blank" style="display:inline-flex;align-items:center;gap:4px;background:#2a313b;padding:3px 8px;border-radius:4px;margin:3px;font-size:11px" title="${esc(a.flag || "upload")} · ${esc(a.file)}">📁 ${esc(a.flag || "file")}: ${esc(a.file)}</a>`;
+              return `<a href="/api/asset/${esc(j.id)}/${encodeURIComponent(a.file)}" target="_blank" style="display:inline-flex;align-items:center;gap:4px;background:#2a313b;padding:3px 8px;border-radius:4px;margin:3px;font-size:11px" title="${esc(a.flag || "upload")} · ${esc(a.file)}">📁 ${esc(a.flag || "file")}: ${esc(a.file)}</a>`;
             }
           }).join("") +
           `</details>`
@@ -365,6 +365,7 @@ function render(d) {
       <td class="note">${esc((j.note||"") + (j.local_out ? " · " + j.local_out : ""))}</td>
       <td><a href="/api/view/${esc(j.id)}" target="_blank">View</a>
           <button class="sec" data-load="${esc(j.id)}">Load</button>
+          <button class="sec" data-attach="${esc(j.id)}" title="attach this job's input files (image / first / middle / last frame, audio, keyframes) on top of the current form — a slot already staged is replaced, the rest is kept">+ media</button>
           <button class="danger" data-del="${esc(j.id)}">✕</button></td>
     </tr>`; }).join("");
   document.querySelectorAll("[data-load]").forEach(b =>
@@ -388,37 +389,18 @@ function render(d) {
         } else {
           localStorage.setItem("ltxq.chain", "0");
         }
-        // re-attach this job's input files via the staging area
-        let assets = [];
-        try { assets = JSON.parse(j.assets || "[]"); } catch (e) {}
-        const extraToks = (() => { try { return JSON.parse(j.extra_args || "[]"); }
-                                   catch (e) { return []; } })();
-        staged.length = 0;
-        const SLOT = {"--image": "image", "--audio": "audio", "--input-video": "input_video",
-                      "--first-frame": "first_frame", "--middle-frame": "middle_frame",
-                      "--last-frame": "last_frame"};
-        for (const a of assets) {
-          if (SLOT[a.flag]) {
-            const r = await api(`/api/stage_from/${j.id}/${a.file}`, {method:"POST"});
-            staged.push({slot: SLOT[a.flag], name: r.staged});
-          } else if (!a.flag) {
-            const ki = extraToks.indexOf("--keyframe");
-            if (ki >= 0 && extraToks[ki + 1] && extraToks[ki + 1].includes("@" + a.file + "@")) {
-              const spec = extraToks[ki + 1].split("@").pop().replace(/^:/, "");
-              const parts = spec.split(":");
-              const r = await api(`/api/stage_from/${j.id}/${a.file}`, {method:"POST"});
-              staged.push({slot: "keyframe", name: r.staged, index: parts[0] || "0"});
-              if (parts[1]) $("keyframe_strength").value = parts[1];
-              if (parts[2]) $("keyframe_attention_strength").value = parts[2];
-            } else {
-              const r = await api(`/api/stage_from/${j.id}/${a.file}`, {method:"POST"});
-              staged.push({slot: "upload", name: r.staged});
-            }
-          }
-        }
-        renderStaged();
+        await attachJobAssets(j, true);
         window.scrollTo({top: 0, behavior: "smooth"});
         flash("loaded " + j.id + " into the form — edit then Add to queue");
+      } catch (e) { flash(e.message, true); }
+    });
+  document.querySelectorAll("[data-attach]").forEach(b =>
+    b.onclick = async () => {
+      try {
+        const j = (await api("/api/job/" + b.dataset.attach)).job;
+        const n = await attachJobAssets(j, false);
+        flash(n ? `attached ${n} input file${n === 1 ? "" : "s"} from ${j.id} to the form`
+                : `no input files recorded on ${j.id}`, !n);
       } catch (e) { flash(e.message, true); }
     });
   document.querySelectorAll("[data-del]").forEach(b =>
@@ -443,6 +425,50 @@ if (localStorage.getItem("ltxq.chain") === "1") $("chain").checked = true;
 if (localStorage.getItem("ltxq.chain_slot")) $("chain_slot").value = localStorage.getItem("ltxq.chain_slot");
 $("chain").onchange = () => localStorage.setItem("ltxq.chain", $("chain").checked ? "1" : "0");
 $("chain_slot").onchange = () => localStorage.setItem("ltxq.chain_slot", $("chain_slot").value);
+
+// Re-stage a past job's input files (image / first / middle / last frame, audio,
+// input-video, keyframes, plain uploads). replace=true wipes the current staging
+// (Load); replace=false adds on top — a re-attached slot replaces its earlier
+// entry so submit uses exactly what the badges show (+ media).
+const SLOTMAP = {"--image": "image", "--audio": "audio", "--input-video": "input_video",
+                 "--first-frame": "first_frame", "--middle-frame": "middle_frame",
+                 "--last-frame": "last_frame"};
+async function attachJobAssets(j, replace) {
+  let assets = [];
+  try { assets = JSON.parse(j.assets || "[]"); } catch (e) {}
+  const extraToks = (() => { try { return JSON.parse(j.extra_args || "[]"); }
+                             catch (e) { return []; } })();
+  if (replace) staged.length = 0;
+  let n = 0;
+  for (const a of assets) {
+    let slot = null, index = null;
+    if (SLOTMAP[a.flag]) {
+      slot = SLOTMAP[a.flag];
+    } else if (!a.flag) {
+      // plain uploads; keyframes ride along as uploads with an @file@ spec
+      const ki = extraToks.indexOf("--keyframe");
+      if (ki >= 0 && extraToks[ki + 1] && extraToks[ki + 1].includes("@" + a.file + "@")) {
+        const spec = extraToks[ki + 1].split("@").pop().replace(/^:/, "");
+        const parts = spec.split(":");
+        slot = "keyframe"; index = parts[0] || "0";
+        if (parts[1]) $("keyframe_strength").value = parts[1];
+        if (parts[2]) $("keyframe_attention_strength").value = parts[2];
+      } else {
+        slot = "upload";
+      }
+    }
+    if (!slot) continue;
+    const r = await api(`/api/stage_from/${j.id}/${encodeURIComponent(a.file)}`, {method:"POST"});
+    if (!replace && slot !== "upload" && slot !== "keyframe")
+      for (let i = staged.length - 1; i >= 0; i--)
+        if (staged[i].slot === slot) staged.splice(i, 1);
+    staged.push(index ? {slot, name: r.staged, index} : {slot, name: r.staged});
+    n++;
+  }
+  renderStaged();
+  return n;
+}
+
 function addKfRow() {
   const row = document.createElement("div"); row.className = "row";
   row.innerHTML = `<input type="file" accept="image/*" style="flex:1">
@@ -458,7 +484,7 @@ function renderStaged() {
   $("staged").innerHTML = staged.map((s, i) => {
     const ext = (s.name.split('.').pop() || '').toLowerCase();
     const isImg = ["png", "jpg", "jpeg", "webp", "gif"].includes(ext);
-    const thumb = isImg ? `<img src="/api/stage/${esc(s.name)}" width="44" style="border-radius:4px">` : `<span class="badge">🎵/📁 file</span>`;
+    const thumb = isImg ? `<img src="/api/stage/${encodeURIComponent(s.name)}" width="44" style="border-radius:4px">` : `<span class="badge">🎵/📁 file</span>`;
     return `<span class="badge">${esc(s.slot === "upload" ? "upload" : s.slot)}${s.index ? " #" + esc(s.index) : ""} · ${esc(s.name.split("_").slice(2).join("_"))}</span>
      ${thumb}
      <button type="button" class="sec" data-unstage="${i}">✕</button>`;

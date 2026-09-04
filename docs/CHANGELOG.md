@@ -4,7 +4,12 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
 
 ## [Unreleased] - 2026-09-04
 
+### Added
+- **"+ media" attach button on history rows (`static/index.html`)**: Variant of the history Load button that pulls a past job's input files (`--image`, `--first-frame`, `--middle-frame`, `--last-frame`, `--audio`, `--input-video`, keyframes, plain uploads) into the staging area *on top of* the current form — without overwriting the prompt/config or wiping already-staged files. A slot the job also provides (e.g. first-frame) replaces its earlier staged entry so submit uses exactly what the badges show; keyframes/uploads accumulate. The re-staging logic was factored out of Load into a shared `attachJobAssets(j, replace)` used by both buttons (Load keeps its full-replace behavior).
+
 ### Fixed
+- **URL-safety of asset/staging links (`static/index.html`)**: History input thumbnails/links, staged-file previews, and the `/api/stage_from` re-attach calls now `encodeURIComponent` the filename — filenames with spaces previously relied on implicit browser encoding, and names containing `#`/`%`/`?` would silently truncate the request path. Verified against a live UI (`/api/stage_from` and `/api/stage/<name>` return the copied file for names containing spaces).
+
 - **File-descriptor exhaustion after hours of idling (`ltxq.py`, `server.py`)**: Every `db()` call dropped its SQLite connection without `close()`; in request/engine threads (Python 3.14) those connections are only reclaimed at the next GC pass, so with the dashboard polling `/api/state` every 2 s the process leaked its `ltxq.db`/`ltxq.db-wal` file descriptors (~2 per request) until `OSError: [Errno 24] Too many open files` / `sqlite3.OperationalError: unable to open database file` after roughly 5–7 hours. All request handlers and the `cmd_*` entry points reachable from the ui process (`cmd_add`, `cmd_regen`, `cmd_cancel`, `cmd_models`, `cmd_serve_start`) now close their connections deterministically, the engine loop closes its long-lived connection on stop and runs `gc.collect()` in the 600 s maintenance cycle, and `is_local()` resolves `conn_type` from the in-memory `HOSTDEST` cache (extended by `load_dests()`) instead of opening a connection per call — it had been called on every `ssh()`/engine tick. Schema creation and migrations now also run once per process instead of on every `db()` call. Verified: fd count stays flat (50 → 49 over 150 requests + API round-trip, vs 52 → 280 before).
 
 ## [Unreleased] - 2026-09-03
