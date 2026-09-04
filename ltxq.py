@@ -3,7 +3,7 @@
 One-shot runner (default) and serve (warm worker) backends. Mac/Linux hosts.
 Deps: python3 + pyyaml + system ssh/rsync/tar.
 """
-import argparse, hashlib, importlib.metadata, json, os, random, re, shlex, shutil, sqlite3, subprocess, sys, time, uuid
+import argparse, gc, hashlib, importlib.metadata, json, os, random, re, shlex, shutil, sqlite3, subprocess, sys, time, uuid
 from pathlib import Path
 import yaml
 
@@ -131,16 +131,24 @@ def conf():
         c.setdefault(k, v)
     return c
 
+_DB_INITED = False
+
 def db():
+    """New sqlite connection. In threads an unclosed connection keeps its fds
+    until a GC pass, so every caller in a long-lived process must close() it."""
+    global _DB_INITED
     con = sqlite3.connect(DB_PATH, timeout=5)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA busy_timeout=5000")
-    con.executescript(SCHEMA)
-    for ddl in MIGRATIONS:
-        try: con.execute(ddl)
-        except sqlite3.OperationalError: pass
-    con.commit(); return con
+    if not _DB_INITED:                    # schema + migrations once per process
+        con.executescript(SCHEMA)
+        for ddl in MIGRATIONS:
+            try: con.execute(ddl)
+            except sqlite3.OperationalError: pass
+        con.commit()
+        _DB_INITED = True
+    return con
 
 def sync_hosts(con):
     hosts_cfg = conf()["hosts"]
@@ -201,12 +209,13 @@ def rotate_worker_logs(c, con, max_bytes=10 * 1024 * 1024):
 
 def load_dests(con):
     HOSTDEST.clear()
-    for r in con.execute("SELECT alias, dest, ssh_opts, mux FROM hosts"):
+    for r in con.execute("SELECT alias, dest, ssh_opts, mux, conn_type FROM hosts"):
         HOSTDEST[r["alias"]] = (r["dest"] or r["alias"],
-                                json.loads(r["ssh_opts"] or "[]"), bool(r["mux"]))
+                                json.loads(r["ssh_opts"] or "[]"), bool(r["mux"]),
+                                r["conn_type"] or "ssh")
 
 def dest_of(alias):
-    d, extra, mux = HOSTDEST.get(alias, (alias, [], True))
+    d, extra, mux, _ = HOSTDEST.get(alias, (alias, [], True, "ssh"))
     return d, [os.path.expanduser(x) if x.startswith("~") else x for x in extra], mux
 
 def ssh_eopts(alias):
@@ -214,9 +223,16 @@ def ssh_eopts(alias):
     return list(SSH_OPTS) + (list(MUX_OPTS) if mux else []) + list(extra)
 
 def is_local(alias):
+    """conn_type from the in-memory host cache; falls back to a db lookup
+    (closed immediately) only when the alias isn't cached yet."""
+    if alias in HOSTDEST:
+        return HOSTDEST[alias][3] == "local"
     con = db()
-    r = con.execute("SELECT conn_type FROM hosts WHERE alias=?", (alias,)).fetchone()
-    return bool(r) and r["conn_type"] == "local"
+    try:
+        r = con.execute("SELECT conn_type FROM hosts WHERE alias=?", (alias,)).fetchone()
+        return bool(r) and (r["conn_type"] or "ssh") == "local"
+    finally:
+        con.close()
 
 
 def run_cmd(alias, cmd, timeout=60):
@@ -669,6 +685,12 @@ def resolve_chain(con, job):
 
 def cmd_add(a):
     c, con = conf(), db(); sync_hosts(con)
+    try:
+        return _cmd_add(c, con, a)
+    finally:
+        con.close()
+
+def _cmd_add(c, con, a):
     jid = uuid.uuid4().hex[:10]
     prompt = Path(a.prompt_file).read_text()
     if a.config_file:
@@ -746,6 +768,12 @@ def cmd_add(a):
 
 def cmd_regen(a):
     con = db(); sync_hosts(con)
+    try:
+        return _cmd_regen(con, a)
+    finally:
+        con.close()
+
+def _cmd_regen(con, a):
     p = con.execute("SELECT * FROM jobs WHERE id=?", (a.id,)).fetchone()
     if not p: sys.exit("no such job")
     pd = Path(p["local_dir"])
@@ -785,6 +813,12 @@ def cmd_regen(a):
 
 def cmd_cancel(a):
     con = db(); sync_hosts(con)
+    try:
+        return _cmd_cancel(con, a)
+    finally:
+        con.close()
+
+def _cmd_cancel(con, a):
     job = con.execute("SELECT * FROM jobs WHERE id=?", (a.id,)).fetchone()
     if not job: sys.exit("no such job")
     if job["status"] in ("done", "failed", "cancelled"):
@@ -827,6 +861,7 @@ def cmd_run(a):
         try:
             now = time.time()
             if now - last_gc > 600:
+                gc.collect()
                 clean_tmp()
                 rotate_worker_logs(c, con)
                 last_gc = now
@@ -871,6 +906,12 @@ def _models_dir(con, c, alias):
 
 def cmd_models(a):
     con, c = db(), conf(); sync_hosts(con)
+    try:
+        return _cmd_models(con, c, a)
+    finally:
+        con.close()
+
+def _cmd_models(con, c, a):
     h = _models_dir(con, c, a.alias)
     dl = "" if a.catalog else "--downloaded-only "
     r = ssh(a.alias, f'{dollar_home(cli_of(c, h))} models list {dl}'
@@ -984,6 +1025,12 @@ def cmd_reconcile(a):
 
 def cmd_serve_start(a):
     con, c = db(), conf(); sync_hosts(con)
+    try:
+        return _cmd_serve_start(con, c, a)
+    finally:
+        con.close()
+
+def _cmd_serve_start(con, c, a):
     h = _models_dir(con, c, a.alias)
     if not h["home"]:
         probe(con, c, a.alias)

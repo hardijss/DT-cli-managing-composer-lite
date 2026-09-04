@@ -2,6 +2,11 @@
 
 All notable changes, bug fixes, and feature additions to `ltxq` are documented here.
 
+## [Unreleased] - 2026-09-04
+
+### Fixed
+- **File-descriptor exhaustion after hours of idling (`ltxq.py`, `server.py`)**: Every `db()` call dropped its SQLite connection without `close()`; in request/engine threads (Python 3.14) those connections are only reclaimed at the next GC pass, so with the dashboard polling `/api/state` every 2 s the process leaked its `ltxq.db`/`ltxq.db-wal` file descriptors (~2 per request) until `OSError: [Errno 24] Too many open files` / `sqlite3.OperationalError: unable to open database file` after roughly 5–7 hours. All request handlers and the `cmd_*` entry points reachable from the ui process (`cmd_add`, `cmd_regen`, `cmd_cancel`, `cmd_models`, `cmd_serve_start`) now close their connections deterministically, the engine loop closes its long-lived connection on stop and runs `gc.collect()` in the 600 s maintenance cycle, and `is_local()` resolves `conn_type` from the in-memory `HOSTDEST` cache (extended by `load_dests()`) instead of opening a connection per call — it had been called on every `ssh()`/engine tick. Schema creation and migrations now also run once per process instead of on every `db()` call. Verified: fd count stays flat (50 → 49 over 150 requests + API round-trip, vs 52 → 280 before).
+
 ## [Unreleased] - 2026-09-03
 
 ### Added

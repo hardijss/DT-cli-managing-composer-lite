@@ -2,7 +2,7 @@
 
 Run: ./venv/bin/python ltxq.py ui [--port 8765] [--no-engine]
 """
-import argparse, contextlib, io, json, shlex, threading, time
+import argparse, contextlib, gc, io, json, shlex, threading, time
 from pathlib import Path
 
 import flask
@@ -125,6 +125,7 @@ def engine_loop():
         try:
             now = time.time()
             if now - last_gc > 600:
+                gc.collect()
                 ltxq.clean_tmp()
                 ltxq.rotate_worker_logs(c, con)
                 last_gc = now
@@ -162,6 +163,7 @@ def engine_loop():
         except Exception as e:
             print("[engine] loop error:", repr(e))
         STATE["stop"].wait(c["poll_secs"])
+    con.close()
     STATE["engine"] = False
     print("[engine] stopped")
 
@@ -221,23 +223,23 @@ def index():
 
 @app.get("/api/state")
 def api_state():
-    con = ltxq.db()
-    jobs = [jrow(j) for j in con.execute(
-        "SELECT * FROM jobs ORDER BY created_at DESC LIMIT 50")]
-    now = int(time.time())
-    hosts = []
-    for h in con.execute("SELECT * FROM hosts WHERE enabled=1"):
-        hp = STATE["host_paused"].get(h["alias"], {})
-        hosts.append({
-            "alias": h["alias"], "models_dir": h["models_dir"],
-            "max_jobs": h["max_jobs"], "backend": h["backend"],
-            "idle": STATE["idle"].get(h["alias"], {}),
-            "paused": bool(hp.get("paused")),
-            "release_at": hp.get("release_at"),
-            **STATE["hosts"].get(h["alias"], {}),
-        })
-    return flask.jsonify(jobs=jobs, hosts=hosts, engine=STATE["engine"],
-                         now=now)
+    with contextlib.closing(ltxq.db()) as con:
+        jobs = [jrow(j) for j in con.execute(
+            "SELECT * FROM jobs ORDER BY created_at DESC LIMIT 50")]
+        now = int(time.time())
+        hosts = []
+        for h in con.execute("SELECT * FROM hosts WHERE enabled=1"):
+            hp = STATE["host_paused"].get(h["alias"], {})
+            hosts.append({
+                "alias": h["alias"], "models_dir": h["models_dir"],
+                "max_jobs": h["max_jobs"], "backend": h["backend"],
+                "idle": STATE["idle"].get(h["alias"], {}),
+                "paused": bool(hp.get("paused")),
+                "release_at": hp.get("release_at"),
+                **STATE["hosts"].get(h["alias"], {}),
+            })
+        return flask.jsonify(jobs=jobs, hosts=hosts, engine=STATE["engine"],
+                             now=now)
 
 
 def _capture(fn, *args_):
@@ -273,16 +275,16 @@ def api_add():
     template = HERE / "templates" / f"{model}.json"
     config_file = None
     if not template.exists():
-        base = con0 = ltxq.db()
-        row = con0.execute("SELECT config_text FROM jobs WHERE status='done' AND "
-                           "config_text IS NOT NULL ORDER BY created_at DESC").fetchone()
-        if not row:
-            return flask.jsonify(error="no config: provide a full config JSON "
-                                "(use 'Fill config from last job' after a first "
-                                "render, or add templates/"
-                                + model + ".json)"), 400
-        config_file = tmp / f"cfg_{int(time.time()*1000)}.json"
-        config_file.write_text(row["config_text"])
+        with contextlib.closing(ltxq.db()) as con0:
+            row = con0.execute("SELECT config_text FROM jobs WHERE status='done' AND "
+                               "config_text IS NOT NULL ORDER BY created_at DESC").fetchone()
+            if not row:
+                return flask.jsonify(error="no config: provide a full config JSON "
+                                    "(use 'Fill config from last job' after a first "
+                                    "render, or add templates/"
+                                    + model + ".json)"), 400
+            config_file = tmp / f"cfg_{int(time.time()*1000)}.json"
+            config_file.write_text(row["config_text"])
     ns = argparse.Namespace(
         model=model, prompt_file=str(prompt_file),
         config_file=config_file, config_json=f.get("config_json") or None,
@@ -352,10 +354,10 @@ def _staged_ok(p):
 
 @app.get("/api/view/<jid>")
 def api_view(jid):
-    con = ltxq.db()
-    j = con.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
-    if not j or j["status"] != "done":
-        return "no collected video for this job", 404
+    with contextlib.closing(ltxq.db()) as con:
+        j = con.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
+        if not j or j["status"] != "done":
+            return "no collected video for this job", 404
     v = ltxq.video_of(j)
     if not v:
         return "no video file found", 404
@@ -365,24 +367,24 @@ def api_view(jid):
 @app.post("/api/extract")
 def api_extract():
     d = flask.request.get_json(force=True) or {}
-    con = ltxq.db()
-    j = con.execute("SELECT * FROM jobs WHERE id=?", (d.get("jid", ""),)).fetchone()
-    if not j or j["status"] != "done":
-        return flask.jsonify(error="job is not done / not found"), 400
-    v = ltxq.video_of(j)
-    if not v:
-        return flask.jsonify(error="no video in output dir"), 400
-    STAGE.mkdir(parents=True, exist_ok=True)
-    tmp = STAGE / f"stage_{int(time.time()*1000)}_{j['id']}.tmp.png"
-    try:
-        n = ltxq.extract_frame(v, str(d.get("frame", "")).strip(), tmp)
-    except (RuntimeError, ValueError) as e:
-        tmp.unlink(missing_ok=True)
-        return flask.jsonify(error=str(e)), 400
-    dst = tmp.with_name(f"stage_{int(time.time()*1000)}_{j['id']}_f{n}.png")
-    tmp.rename(dst)
-    return flask.jsonify(staged=dst.name, frame=n,
-                         preview="/api/stage/" + dst.name)
+    with contextlib.closing(ltxq.db()) as con:
+        j = con.execute("SELECT * FROM jobs WHERE id=?", (d.get("jid", ""),)).fetchone()
+        if not j or j["status"] != "done":
+            return flask.jsonify(error="job is not done / not found"), 400
+        v = ltxq.video_of(j)
+        if not v:
+            return flask.jsonify(error="no video in output dir"), 400
+        STAGE.mkdir(parents=True, exist_ok=True)
+        tmp = STAGE / f"stage_{int(time.time()*1000)}_{j['id']}.tmp.png"
+        try:
+            n = ltxq.extract_frame(v, str(d.get("frame", "")).strip(), tmp)
+        except (RuntimeError, ValueError) as e:
+            tmp.unlink(missing_ok=True)
+            return flask.jsonify(error=str(e)), 400
+        dst = tmp.with_name(f"stage_{int(time.time()*1000)}_{j['id']}_f{n}.png")
+        tmp.rename(dst)
+        return flask.jsonify(staged=dst.name, frame=n,
+                             preview="/api/stage/" + dst.name)
 
 
 @app.get("/api/stage/<name>")
@@ -415,19 +417,19 @@ def api_stage_from(jid, name):
 
 @app.post("/api/delete/<jid>")
 def api_delete(jid):
-    con = ltxq.db()
-    j = con.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
-    if not j:
-        return flask.jsonify(error="no such job"), 404
-    if j["status"] in ("queued", "uploading", "running", "collecting",
-                       "suspect", "cancelling"):
-        return flask.jsonify(error="job is still active — cancel it first"), 400
     import shutil as _sh
     d = (flask.request.get_json(force=True, silent=True) or {})
-    if d.get("output") and j["local_out"]:
-        _sh.rmtree(j["local_out"], ignore_errors=True)
-    _sh.rmtree(HERE / "jobs" / jid, ignore_errors=True)
-    con.execute("DELETE FROM jobs WHERE id=?", (jid,)); con.commit()
+    with contextlib.closing(ltxq.db()) as con:
+        j = con.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
+        if not j:
+            return flask.jsonify(error="no such job"), 404
+        if j["status"] in ("queued", "uploading", "running", "collecting",
+                           "suspect", "cancelling"):
+            return flask.jsonify(error="job is still active — cancel it first"), 400
+        if d.get("output") and j["local_out"]:
+            _sh.rmtree(j["local_out"], ignore_errors=True)
+        _sh.rmtree(HERE / "jobs" / jid, ignore_errors=True)
+        con.execute("DELETE FROM jobs WHERE id=?", (jid,)); con.commit()
     return flask.jsonify(ok=True)
 
 
@@ -481,22 +483,23 @@ def api_regen(jid):
 
 @app.get("/api/models/<alias>")
 def api_models(alias):
-    con, c = ltxq.db(), ltxq.conf()
-    out, err = _capture(ltxq.cmd_models,
-                        argparse.Namespace(alias=alias, catalog=False))
-    rows = [{"model": r["model"], "name": r["name"], "downloaded": r["downloaded"]}
-            for r in con.execute("SELECT model,name,downloaded FROM registry "
-                                 "WHERE host=? AND downloaded=1 ORDER BY name", (alias,))]
-    return flask.jsonify(models=rows, error=err, raw=out)
+    with contextlib.closing(ltxq.db()) as con:
+        c = ltxq.conf()
+        out, err = _capture(ltxq.cmd_models,
+                            argparse.Namespace(alias=alias, catalog=False))
+        rows = [{"model": r["model"], "name": r["name"], "downloaded": r["downloaded"]}
+                for r in con.execute("SELECT model,name,downloaded FROM registry "
+                                     "WHERE host=? AND downloaded=1 ORDER BY name", (alias,))]
+        return flask.jsonify(models=rows, error=err, raw=out)
 
 
 @app.get("/api/job/<jid>")
 def api_job(jid):
-    con = ltxq.db()
-    j = con.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
-    if not j:
-        return flask.jsonify(error="no such job"), 404
-    return flask.jsonify(job=jrow(j))
+    with contextlib.closing(ltxq.db()) as con:
+        j = con.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
+        if not j:
+            return flask.jsonify(error="no such job"), 404
+        return flask.jsonify(job=jrow(j))
 
 
 def run_ui(a):
