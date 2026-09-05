@@ -35,8 +35,8 @@ environment — that *is* the credentials mechanism (no passwords in yaml).
 | Key | Default | Purpose |
 |---|---|---|
 | `alias` | — | host name used everywhere (required) |
-| `dest` | alias | ssh destination (`user@host`) |
-| `conn_type` | `ssh` | `ssh` or `local` (local = same machine, no ssh) |
+| `dest` | alias | ssh destination (`user@host`); ignored for `conn_type: local` |
+| `conn_type` | `ssh` | `ssh` or `local` — transport choice only. A `local` host is a full peer of an ssh host: the same commands run via `/bin/zsh -c` instead of ssh, and transfers are local file copies instead of tar-over-ssh/rsync. Probe, dispatch, oneshot/serve backends, idle policy, cancel, and collection behave identically; `ssh_opts`/`mux` are unused there. |
 | `enabled` | `true` | participate in dispatch / UI |
 | `max_jobs` | `1` | concurrent in-flight jobs |
 | `models_dir` | probed | pinned models directory |

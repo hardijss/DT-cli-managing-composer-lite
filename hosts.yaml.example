@@ -30,8 +30,12 @@ hosts:
         - Resolve
         - Blender
       pause_release_secs: 300  # busy this long -> serve-stop to free model RAM
-  # this machine, no ssh. CANNOT run tod-cli generation (limited hardware) —
-  # enable only to test queue/UI/transport manually.
+  # this machine, no ssh. A full peer of ssh hosts: conn_type: local swaps the
+  # transport (local shell + file copies instead of ssh/rsync) but everything
+  # else — probe, dispatch, oneshot/serve backends, idle policy, cancel,
+  # collection — is identical. Enable it if this machine can run tod-cli
+  # generation; leave it disabled on limited hardware (still handy for testing
+  # queue/UI/transport manually).
   - alias: local
     conn_type: local
     dest: local

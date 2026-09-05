@@ -49,9 +49,9 @@ and `tod-dt-cli` works. All state comes from SSH one-liners and log tailing.
 
 - **macOS** (control machine and render hosts) — paths and tooling assume it
 - **Python 3.14** on the control machine
-- **OpenSSH** with key-based auth to each render host (`ssh <host>` must work
-  without a password prompt; credentials come from `~/.ssh/config`, never from
-  `hosts.yaml`)
+- **OpenSSH** with key-based auth to each *remote* render host (`ssh <host>`
+  must work without a password prompt; credentials come from `~/.ssh/config`,
+  never from `hosts.yaml`). Local hosts (`conn_type: local`) need no ssh.
 - **rsync** and **ffmpeg/ffprobe** (for collection and frame extraction)
 - **[tod-dt-cli](https://github.com/wee-todd/DrawOtherThings/tree/main/Documentation/CustomCLI)**
   (DrawOtherThings CustomCLI) built from source on each render host — the
@@ -85,7 +85,10 @@ hosts:
     dest: user@192.168.0.10
     max_jobs: 1
     models_dir: /path/to/models
-  # this machine, no ssh — enable only to test queue/UI/transport manually
+  # this machine, no ssh — a full peer of ssh hosts when it can run tod-cli:
+  # same commands, job flow, serve worker and idle policy (transfers are local
+  # copies instead of ssh/rsync). Disable if this machine lacks the hardware,
+  # or keep it just for testing queue/UI/transport.
   - alias: local
     conn_type: local
     dest: local
