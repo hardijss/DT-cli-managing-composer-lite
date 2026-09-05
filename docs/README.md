@@ -9,4 +9,5 @@ Topic docs:
 - [environment.md](environment.md) — hosts.yaml keys, env vars, CLI flags
 - [features.md](features.md) — full feature list, known issues, TODOs
 - [decisions.md](decisions.md) — design decisions and rationale
+- [macos-app-plan.md](macos-app-plan.md) — target goals / phased plan for the native macOS app
 - [CHANGELOG.md](CHANGELOG.md) — changelog
