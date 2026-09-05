@@ -55,3 +55,29 @@ enum LockProbe {
         return rc == -1 // EAGAIN/EACCES → someone else holds it
     }
 }
+
+/// Locates engine-side helper tools the way `ltxq.ff_tool()` does. A GUI app
+/// inherits a minimal PATH, so `which` alone is not enough — the Homebrew and
+/// MacPorts bin dirs are probed directly. Missing tools are non-fatal: frame
+/// extraction / chain continuation degrade, generation is unaffected.
+enum ToolProbe {
+    static let searchDirs = ["/opt/homebrew/bin", "/usr/local/bin",
+                             "/opt/local/bin", "/usr/bin", "/bin"]
+
+    static func find(_ name: String) -> Bool {
+        if let path = ProcessInfo.processInfo.environment["PATH"] {
+            for dir in path.split(separator: ":") {
+                if FileManager.default.isExecutableFile("\(dir)/\(name)") { return true }
+            }
+        }
+        for dir in searchDirs {
+            if FileManager.default.isExecutableFile("\(dir)/\(name)") { return true }
+        }
+        return false
+    }
+
+    /// Names of required-for-features tools that could not be found.
+    static func missingTools() -> [String] {
+        ["ffmpeg", "ffprobe"].filter { !find($0) }
+    }
+}

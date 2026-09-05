@@ -30,6 +30,9 @@ final class EngineManager: ObservableObject {
     @Published private(set) var state: EngineState = .idle
     @Published private(set) var effectivePort: Int = 8765
     @Published private(set) var logTail: String = ""
+    /// Non-fatal startup findings (e.g. ffmpeg missing) shown as a banner
+    /// over the dashboard; cleared on each launch.
+    @Published private(set) var warnings: [String] = []
 
     private var process: Process?
     private var stoppingIntentionally = false
@@ -83,6 +86,14 @@ final class EngineManager: ObservableObject {
         let python = AppSettings.pythonURL
         let script = AppSettings.scriptURL
 
+        warnings = []
+        let missing = ToolProbe.missingTools()
+        if !missing.isEmpty {
+            warnings.append("Not found: \(missing.joined(separator: ", ")). "
+                + "Frame extraction and chain continuation will fail "
+                + "(generation is unaffected). Install with `brew install ffmpeg`.")
+            appendLog("[app] startup probe: " + warnings[0] + "\n")
+        }
         guard FileManager.default.fileExists(atPath: python.path) else {
             state = .failed(reason: "Python interpreter not found:\n\(python.path)\n\n"
                 + "Set the repo path in Settings (it must contain venv/bin/python).")
@@ -164,6 +175,12 @@ final class EngineManager: ObservableObject {
         child.executableURL = python
         child.arguments = arguments
         child.currentDirectoryURL = repo
+        // GUI apps inherit a minimal PATH that misses Homebrew's bin dirs, where
+        // ffmpeg/ffprobe live — extend it so engine-side subprocesses find them.
+        var env = ProcessInfo.processInfo.environment
+        let toolDirs = ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"]
+        env["PATH"] = (toolDirs.joined(separator: ":")) + ":" + (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
+        child.environment = env
         let outPipe = Pipe()
         let errPipe = Pipe()
         child.standardOutput = outPipe

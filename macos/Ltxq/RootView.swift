@@ -2,15 +2,52 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var engine: EngineManager
+    @State private var warningsDismissed = false
 
     var body: some View {
         switch engine.state {
         case .running:
             DashboardView(url: engine.dashboardURL)
                 .id(engine.dashboardURL)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if !warningsDismissed, !engine.warnings.isEmpty {
+                        WarningBanner(messages: engine.warnings) {
+                            warningsDismissed = true
+                        }
+                    }
+                }
         default:
             StatusView()
         }
+    }
+}
+
+/// Non-blocking startup findings (missing helper tools) shown above the
+/// dashboard until dismissed.
+struct WarningBanner: View {
+    let messages: [String]
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(messages, id: \.self) { message in
+                    Text(message).font(.callout)
+                }
+            }
+            Spacer()
+            Button {
+                onDismiss()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .background(.yellow.opacity(0.18), in: Rectangle())
     }
 }
 
