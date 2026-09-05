@@ -13,9 +13,13 @@ offline: false
 # Per-host cli_path overrides the global cli_path above (different binary or
 # version per machine); conn_type / models_dir / idle_policy are per-host too.
 hosts:
+  # example remote render host — pre-disabled. Fill in dest / models_dir and
+  # change enabled to true when you actually use this host. While it stays
+  # disabled, jobs without --host go to the local host below.
   - alias: ltx-a
     dest: user@192.168.0.10
     max_jobs: 1
+    enabled: false
     # cli_path: ~/tod-dt-cli   # uncomment to use a different binary on ltx-a
     models_dir: /path/to/models
     # idle consumer: local workload on the render host takes precedence
@@ -33,11 +37,11 @@ hosts:
   # this machine, no ssh. A full peer of ssh hosts: conn_type: local swaps the
   # transport (local shell + file copies instead of ssh/rsync) but everything
   # else — probe, dispatch, oneshot/serve backends, idle policy, cancel,
-  # collection — is identical. Enable it if this machine can run tod-cli
-  # generation; leave it disabled on limited hardware (still handy for testing
-  # queue/UI/transport manually).
+  # collection — is identical. Pre-enabled so a fresh copy generates locally
+  # out of the box; set enabled: false if this machine should not generate
+  # (limited hardware — it still works for testing queue/UI/transport).
   - alias: local
     conn_type: local
     dest: local
     max_jobs: 1
-    enabled: false
+    enabled: true

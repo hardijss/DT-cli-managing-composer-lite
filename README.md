@@ -81,18 +81,21 @@ capacity. Minimal example:
 cli_path: ~/tod-dt-cli
 movies_dir: ~/Movies/generations
 hosts:
+  # example remote host — pre-disabled; fill in dest/models_dir and set
+  # enabled: true when you use it
   - alias: ltx-a
     dest: user@192.168.0.10
     max_jobs: 1
+    enabled: false
     models_dir: /path/to/models
   # this machine, no ssh — a full peer of ssh hosts when it can run tod-cli:
   # same commands, job flow, serve worker and idle policy (transfers are local
-  # copies instead of ssh/rsync). Disable if this machine lacks the hardware,
-  # or keep it just for testing queue/UI/transport.
+  # copies instead of ssh/rsync). Pre-enabled for local generation; set
+  # enabled: false if this machine lacks the hardware.
   - alias: local
     conn_type: local
     dest: local
-    enabled: false
+    enabled: true
 ```
 
 All global and per-host keys (idle policy, per-host CLI binary, ssh options,
