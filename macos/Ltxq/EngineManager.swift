@@ -122,13 +122,11 @@ final class EngineManager: ObservableObject {
                 + "Set the repo path in Settings.")
             return
         }
-        guard FileManager.default.fileExists(
-            atPath: repo.appendingPathComponent("hosts.yaml").path) else {
-            state = .failed(reason: "hosts.yaml not found in:\n\(repo.path)\n\n"
-                + "The engine cannot start without it. Copy the example and edit it:\n"
-                + "cp hosts.yaml.example hosts.yaml")
-            return
-        }
+        // hosts.yaml needs no app-side guard: the engine resolves it itself
+        // ($LTXQ_CONF, then the repo, then ~/Library/Application Support/Ltxq,
+        // seeding from hosts.yaml.example on first start). A missing or broken
+        // file surfaces in the engine output below.
+        appendLog("[app] hosts.yaml: \(AppSettings.hostsYamlURL.path)\n")
 
         let preferred = AppSettings.preferredPort
 

@@ -30,6 +30,23 @@ enum AppSettings {
         repoURL.appendingPathComponent("ltxq.py")
     }
 
+    /// Per-user config dir the engine seeds hosts.yaml into when the repo has none.
+    static var appSupportDir: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Ltxq", isDirectory: true)
+    }
+
+    /// Same resolution the engine does (ltxq.py `_resolve_conf_path`):
+    /// $LTXQ_CONF aside, a repo-side hosts.yaml wins; otherwise the per-user
+    /// one, which the engine creates from hosts.yaml.example on first start.
+    static var hostsYamlURL: URL {
+        let repoCandidate = repoURL.appendingPathComponent("hosts.yaml")
+        if FileManager.default.fileExists(atPath: repoCandidate.path) {
+            return repoCandidate
+        }
+        return appSupportDir.appendingPathComponent("hosts.yaml")
+    }
+
     static var preferredPort: Int {
         UserDefaults.standard.integer(forKey: portKey)
     }

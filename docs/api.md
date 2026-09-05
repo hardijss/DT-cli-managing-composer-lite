@@ -1,6 +1,6 @@
 # HTTP API
 
-**API version: 1.2** (see [Versioning](#versioning) at the end).
+**API version: 1.3** (see [Versioning](#versioning) at the end).
 
 The dashboard, the native macOS app, and external job-composition tools are
 all clients of the same localhost API served by `ltxq.py ui` (Flask, in
@@ -151,6 +151,14 @@ Staged files are attached to a new job by sending `staged_<slot>` (or
 - `POST /api/queue/<alias>/pause` (JSON `{"release_at": <epoch>}` optional)
   — pause dispatch to a host, optionally with a scheduled release
 - `POST /api/queue/<alias>/resume` — resume dispatch immediately
+- `POST /api/hosts/reload` *(since API 1.3)* — validate the on-disk
+  `hosts.yaml` and apply it (re-sync the hosts table). Returns
+  `{"path": "<effective hosts.yaml path>", "hosts": [{"alias", "dest",
+  "enabled"}]}` on success; on a parse or validation error returns 400 with
+  `{"error", "path"}` and leaves the running config untouched. The engine
+  also watches the file and re-reads it automatically within one poll
+  interval of a save, so this endpoint is for immediate feedback and error
+  reporting (used by the macOS app's Settings → Apply Changes).
 
 ## Minimal client examples
 
@@ -229,6 +237,8 @@ data: {"hosts": [{"alias": "ltx-a", "worker_alive": true, ...}]}
 - **1.1** — adds `GET /api/events` (SSE). No existing endpoint changed.
 - **1.2** — adds `GET /api/status` (diagnostics snapshot). No existing
   endpoint changed.
+- **1.3** — adds `POST /api/hosts/reload` (validate + apply hosts.yaml).
+  No existing endpoint changed.
 
 Changes are additive: new endpoints, new optional request fields, new
 response fields. Breaking changes would bump the major version and be

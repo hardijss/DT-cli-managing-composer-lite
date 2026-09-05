@@ -8,7 +8,50 @@ from pathlib import Path
 import yaml
 
 HERE = Path(__file__).resolve().parent
-DB_PATH, CONF_PATH = HERE / "ltxq.db", HERE / "hosts.yaml"
+DB_PATH = HERE / "ltxq.db"
+
+# Config search order: $LTXQ_CONF, then the repo checkout (existing CLI
+# setups keep working unchanged), then the per-user macOS location the app
+# manages. When nothing exists yet, hosts.yaml.example is seeded into the
+# per-user location so a fresh install has something to edit.
+_APP_SUPPORT = (Path.home() / "Library" / "Application Support" / "Ltxq"
+                if sys.platform == "darwin" else None)
+
+def _resolve_conf_path() -> Path:
+    env = os.environ.get("LTXQ_CONF")
+    if env:
+        return Path(env).expanduser()
+    candidates = [HERE / "hosts.yaml"]
+    if _APP_SUPPORT:
+        candidates.append(_APP_SUPPORT / "hosts.yaml")
+    for c in candidates:
+        if c.exists():
+            return c
+    example = HERE / "hosts.yaml.example"
+    if _APP_SUPPORT and example.exists():
+        try:
+            _APP_SUPPORT.mkdir(parents=True, exist_ok=True)
+            shutil.copy(example, candidates[1])
+            return candidates[1]
+        except OSError:
+            pass
+    return candidates[0]
+
+CONF_PATH = _resolve_conf_path()
+
+_conf_mtime = None
+
+def conf_changed() -> bool:
+    """True when hosts.yaml changed on disk since the last call (first call
+    only baselines the mtime). Engine loops poll this between dispatches."""
+    global _conf_mtime
+    try:
+        m = CONF_PATH.stat().st_mtime
+    except OSError:
+        m = None
+    changed = _conf_mtime is not None and m != _conf_mtime
+    _conf_mtime = m
+    return changed
 SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15"]
 MUX_DIR = HERE / ".ssh_mux"; MUX_DIR.mkdir(exist_ok=True)
 MUX_OPTS = ["-o", "ControlMaster=auto",
@@ -126,8 +169,8 @@ HOSTDEST = {}                                   # alias -> (dest, extra_opts, mu
 def conf():
     if not CONF_PATH.exists():
         print(f"ERROR: hosts.yaml not found at {CONF_PATH}\n"
-              f"  copy the example and edit it:\n"
-              f"  cp {CONF_PATH.parent / 'hosts.yaml.example'} {CONF_PATH}",
+              f"  copy the example and edit it (search order: $LTXQ_CONF, "
+              f"{HERE / 'hosts.yaml'}, {_APP_SUPPORT / 'hosts.yaml' if _APP_SUPPORT else '(none)'})",
               file=sys.stderr)
         raise SystemExit(1)
     c = yaml.safe_load(CONF_PATH.read_text())
@@ -912,6 +955,14 @@ def cmd_run(a):
     while True:
         try:
             now = time.time()
+            if conf_changed():
+                try:
+                    c = conf()
+                    sync_hosts(con)
+                    print(f"hosts.yaml reloaded from {CONF_PATH}")
+                except Exception as e:
+                    con.rollback()
+                    print(f"hosts.yaml reload failed ({e!r}) — keeping previous config")
             if now - last_gc > 600:
                 gc.collect()
                 clean_tmp()

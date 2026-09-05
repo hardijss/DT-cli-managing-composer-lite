@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import flask
+import yaml
 
 import ltxq
 
@@ -173,6 +174,22 @@ def _dispatch_allowed(alias):
     return False
 
 
+def _reload_conf(con):
+    """Re-read hosts.yaml after an on-disk change and re-sync the hosts table.
+    Keeps the previous config on parse/validation errors so a half-saved file
+    can't kill dispatch. Returns the new conf, or None to keep the old one."""
+    try:
+        c = ltxq.conf()
+        ltxq.sync_hosts(con)
+        print(f"[engine] hosts.yaml reloaded from {ltxq.CONF_PATH}")
+        _publish_hosts()
+        return c
+    except Exception as e:
+        con.rollback()
+        print(f"[engine] hosts.yaml reload failed ({e!r}) — keeping previous config")
+        return None
+
+
 def engine_loop():
     c, con = ltxq.conf(), ltxq.db(); ltxq.sync_hosts(con)
     STATE["engine"] = True
@@ -190,6 +207,9 @@ def engine_loop():
     while not STATE["stop"].is_set():
         try:
             now = time.time()
+            if ltxq.conf_changed():
+                if (new_c := _reload_conf(con)) is not None:
+                    c = new_c
             if now - last_gc > 600:
                 gc.collect()
                 ltxq.clean_tmp()
@@ -440,7 +460,10 @@ def api_status():
     try:
         conf = ltxq.conf()
     except SystemExit:
-        conf_error = "hosts.yaml missing — copy hosts.yaml.example and edit it"
+        conf_error = (f"hosts.yaml missing — expected at {ltxq.CONF_PATH} "
+                      "(Settings → Edit hosts.yaml creates one from the example)")
+    except yaml.YAMLError as e:
+        conf_error = f"hosts.yaml parse error (fix or Apply a valid file): {e}"
     components = [
         {"name": "ffmpeg", **_tool_status("ffmpeg")},
         {"name": "ffprobe", **_tool_status("ffprobe")},
@@ -754,6 +777,56 @@ def api_queue_resume(alias):
     print(f"[queue] {alias}: manually resumed")
     _publish_hosts()
     return flask.jsonify(ok=True, alias=alias, paused=False)
+
+
+@app.post("/api/hosts/reload")
+def api_hosts_reload():
+    """Validate hosts.yaml on disk and apply it (re-sync the hosts table).
+    Returns 200 with the effective path + host summary, or 400 with the
+    parse/validation error and the file untouched."""
+    try:
+        raw = ltxq.CONF_PATH.read_text()
+    except OSError as e:
+        return flask.jsonify(error=f"cannot read hosts.yaml: {e}",
+                             path=str(ltxq.CONF_PATH)), 400
+    try:
+        cfg = yaml.safe_load(raw)
+    except yaml.YAMLError as e:
+        return flask.jsonify(error=f"YAML parse error: {e}",
+                             path=str(ltxq.CONF_PATH)), 400
+    if cfg is None:
+        cfg = {}
+    if not isinstance(cfg, dict):
+        return flask.jsonify(error="hosts.yaml must be a YAML mapping",
+                             path=str(ltxq.CONF_PATH)), 400
+    hosts = cfg.get("hosts") or []
+    if not isinstance(hosts, list):
+        return flask.jsonify(error="`hosts:` must be a list",
+                             path=str(ltxq.CONF_PATH)), 400
+    aliases = []
+    for h in hosts:
+        if not isinstance(h, dict) or not h.get("alias"):
+            return flask.jsonify(
+                error="every entry under `hosts:` needs at least an `alias:`",
+                path=str(ltxq.CONF_PATH)), 400
+        aliases.append(h["alias"])
+    dupes = [a for a in set(aliases) if aliases.count(a) > 1]
+    if dupes:
+        return flask.jsonify(error=f"duplicate host alias(es): {', '.join(sorted(dupes))}",
+                             path=str(ltxq.CONF_PATH)), 400
+    with contextlib.closing(ltxq.db()) as con:
+        try:
+            ltxq.sync_hosts(con)
+        except Exception as e:
+            con.rollback()
+            return flask.jsonify(error=f"reload failed: {e!r}",
+                                 path=str(ltxq.CONF_PATH)), 400
+        summary = [{"alias": h["alias"], "dest": h["dest"], "enabled": bool(h["enabled"])}
+                   for h in con.execute("SELECT alias, dest, enabled FROM hosts ORDER BY alias")]
+    print(f"[config] hosts.yaml reloaded via API from {ltxq.CONF_PATH} "
+          f"({len(summary)} host(s))")
+    _publish_hosts()
+    return flask.jsonify(path=str(ltxq.CONF_PATH), hosts=summary)
 
 
 @app.post("/api/regen/<jid>")
