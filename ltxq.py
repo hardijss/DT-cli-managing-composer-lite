@@ -124,6 +124,12 @@ POLL_CMD = ('cd {rd} 2>/dev/null || {{ echo NODIR; exit 0; }}; echo ---E; '
 HOSTDEST = {}                                   # alias -> (dest, extra_opts, mux)
 
 def conf():
+    if not CONF_PATH.exists():
+        print(f"ERROR: hosts.yaml not found at {CONF_PATH}\n"
+              f"  copy the example and edit it:\n"
+              f"  cp {CONF_PATH.parent / 'hosts.yaml.example'} {CONF_PATH}",
+              file=sys.stderr)
+        raise SystemExit(1)
     c = yaml.safe_load(CONF_PATH.read_text())
     for k, v in dict(cli_path="~/tod-dt-cli", poll_secs=10, stall_secs=900,
                      remote_root="genwork", movies_dir="~/Movies/generations",
@@ -406,7 +412,15 @@ def launch(c, con, h, job):
                 note="upload failed: " + r.stderr.strip()[:200]); return
     md = dollar_home(h["models_dir"]) if h["models_dir"] else ""
     mdchk = (f'test -d {shlex.quote(md)} || {{ echo NODMDIR; exit 3; }}; ') if md else ""
-    r = ssh(h["alias"], f"{mdchk}cd {shlex.quote(rd)} && nohup sh runner.sh > launch.log 2>&1 & echo $!")
+    # CLI must exist and be executable on the host — fail before burning the upload.
+    # Double quotes so $HOME expands remotely while spaces in the path survive.
+    cchk = (f'test -x "{dollar_home(cli_of(c, h))}" '
+            f'|| {{ echo NOCLI; exit 3; }}; ')
+    r = ssh(h["alias"], f"{cchk}{mdchk}cd {shlex.quote(rd)} && nohup sh runner.sh > launch.log 2>&1 & echo $!")
+    if "NOCLI" in r.stdout:
+        set_job(con, job["id"], status="queued",
+                note=f"tod-cli not found at {cli_of(c, h)} on host '{h['alias']}' "
+                     "— check cli_path in hosts.yaml"); return
     if "NODMDIR" in r.stdout:
         set_job(con, job["id"], note=f"models dir missing on host (volume unmounted?) "
                                      f"— retrying: {h['models_dir']}"); return
@@ -1030,6 +1044,10 @@ def cmd_doctor(a):
                  'tail -c +1 /dev/null; echo $((3+1))')
         chk(f"{h['alias']}: remote shell arithmetic ok", "4" in pr.stdout,
             "remote login shell may not be bash/zsh-compatible")
+        cr = ssh(h["alias"],
+                 f'test -x "{dollar_home(cli_of(c, h))}" && echo CLIOK')
+        chk(f"{h['alias']}: tod-cli present ({cli_of(c, h)})", "CLIOK" in cr.stdout,
+            "not found or not executable — check cli_path in hosts.yaml")
         if _worker_alive(h):
             chk(f"{h['alias']}: serve worker running", True)
         else:

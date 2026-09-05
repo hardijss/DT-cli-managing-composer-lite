@@ -104,6 +104,13 @@ final class EngineManager: ObservableObject {
                 + "Set the repo path in Settings.")
             return
         }
+        guard FileManager.default.fileExists(
+            atPath: repo.appendingPathComponent("hosts.yaml").path) else {
+            state = .failed(reason: "hosts.yaml not found in:\n\(repo.path)\n\n"
+                + "The engine cannot start without it. Copy the example and edit it:\n"
+                + "cp hosts.yaml.example hosts.yaml")
+            return
+        }
 
         let preferred = AppSettings.preferredPort
 
