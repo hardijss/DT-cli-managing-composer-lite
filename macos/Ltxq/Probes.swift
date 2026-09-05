@@ -64,16 +64,43 @@ enum ToolProbe {
     static let searchDirs = ["/opt/homebrew/bin", "/usr/local/bin",
                              "/opt/local/bin", "/usr/bin", "/bin"]
 
-    static func find(_ name: String) -> Bool {
+    static func locate(_ name: String) -> String? {
         if let path = ProcessInfo.processInfo.environment["PATH"] {
             for dir in path.split(separator: ":") {
-                if FileManager.default.isExecutableFile(atPath: "\(dir)/\(name)") { return true }
+                let candidate = "\(dir)/\(name)"
+                if FileManager.default.isExecutableFile(atPath: candidate) {
+                    return candidate
+                }
             }
         }
         for dir in searchDirs {
-            if FileManager.default.isExecutableFile(atPath: "\(dir)/\(name)") { return true }
+            let candidate = "\(dir)/\(name)"
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
         }
-        return false
+        return nil
+    }
+
+    static func find(_ name: String) -> Bool {
+        locate(name) != nil
+    }
+
+    /// First line of `<tool> -version` (ffmpeg/ffprobe style), for the
+    /// Settings diagnostics pane.
+    static func version(of toolPath: String) -> String? {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: toolPath)
+        proc.arguments = ["-version"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        do { try proc.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        proc.waitUntilExit()
+        let output = String(decoding: data, as: UTF8.self)
+        return output.split(separator: "\n", omittingEmptySubsequences: true)
+            .first.map(String.init)
     }
 
     /// Names of required-for-features tools that could not be found.

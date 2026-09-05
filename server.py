@@ -2,7 +2,7 @@
 
 Run: ./venv/bin/python ltxq.py ui [--port 8765] [--no-engine]
 """
-import argparse, contextlib, gc, io, json, re, shlex, threading, time
+import argparse, contextlib, gc, io, json, re, shlex, subprocess, sys, threading, time
 from collections import deque
 from pathlib import Path
 from urllib.parse import urlparse
@@ -20,6 +20,7 @@ MAX_UPLOAD = 4 * 1024**3          # cap multipart bodies (inputs are media files
 
 STATE = {
     "engine": False,            # engine thread running
+    "port": None,               # port the dashboard listens on (set by run_ui)
     "stop": threading.Event(),
     "idle": {},                 # alias -> {busy, reason, busy_since, released}
     "hosts": {},                # alias -> {worker_alive} refreshed by engine
@@ -375,6 +376,116 @@ def api_state():
     return flask.jsonify(**state_dict())
 
 
+# --------------------------------------------------------------- diagnostics
+# Powers the dashboard's gear-icon overlay ("Settings & server status"):
+# component inventory (presence / resolved path / version of everything the
+# server actually uses), the effective hosts.yaml settings, and an engine +
+# per-host summary. Read-only snapshot, computed per request (only fetched
+# when the overlay opens or its Refresh button is pressed); tool versions are
+# cached because they cannot change while the server runs.
+
+_TOOL_TTL = 600.0                     # seconds; tool resolution + -version run
+_TOOL_CACHE = {"at": 0.0, "tools": {}}
+
+
+def _version_line(path):
+    """First line of `<tool> -version` (ffmpeg/ffprobe style)."""
+    try:
+        r = subprocess.run([path, "-version"], capture_output=True, text=True,
+                           timeout=10)
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"(version check failed: {e})"
+    for line in (r.stdout or r.stderr).splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _tool_status(name):
+    """{present, path, version} for a CLI helper resolved like the engine does."""
+    now = time.time()
+    cached = _TOOL_CACHE["tools"].get(name)
+    if cached and now - _TOOL_CACHE["at"] < _TOOL_TTL:
+        return cached
+    try:
+        path = ltxq.ff_tool(name)
+        info = {"present": True, "path": path, "version": _version_line(path)}
+    except RuntimeError:
+        info = {"present": False, "path": None, "version": None}
+    _TOOL_CACHE["tools"][name] = info
+    _TOOL_CACHE["at"] = now
+    return info
+
+
+def _pkg_version(dist):
+    try:
+        import importlib.metadata as im
+        return im.version(dist)
+    except Exception:
+        return None
+
+
+def _git_head():
+    try:
+        r = subprocess.run(["git", "-C", str(HERE), "rev-parse", "--short", "HEAD"],
+                           capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() or None
+    except OSError:
+        return None
+
+
+@app.get("/api/status")
+def api_status():
+    conf, conf_error = None, None
+    try:
+        conf = ltxq.conf()
+    except SystemExit:
+        conf_error = "hosts.yaml missing — copy hosts.yaml.example and edit it"
+    components = [
+        {"name": "ffmpeg", **_tool_status("ffmpeg")},
+        {"name": "ffprobe", **_tool_status("ffprobe")},
+        {"name": "python", "present": True, "path": sys.executable,
+         "version": sys.version.split()[0]},
+        {"name": "flask", "present": True, "path": None,
+         "version": _pkg_version("flask")},
+        {"name": "pyyaml", "present": True, "path": None,
+         "version": _pkg_version("pyyaml")},
+    ]
+    db_bytes = None
+    try:
+        db_bytes = ltxq.DB_PATH.stat().st_size
+    except OSError:
+        pass
+    settings, hosts = {}, []
+    if conf is not None:
+        settings = {k: conf[k] for k in
+                    ("cli_path", "poll_secs", "stall_secs", "remote_root",
+                     "movies_dir", "use_pty", "keep_remote", "offline",
+                     "disable_preview", "download_missing")}
+    with contextlib.closing(ltxq.db()) as con:
+        jobs = dict(con.execute(
+            "SELECT status, COUNT(*) FROM jobs GROUP BY status").fetchall())
+        for h in con.execute("SELECT * FROM hosts ORDER BY alias"):
+            live = STATE["hosts"].get(h["alias"], {})
+            hosts.append({
+                "alias": h["alias"], "enabled": bool(h["enabled"]),
+                "backend": h["backend"], "max_jobs": h["max_jobs"],
+                "models_dir": h["models_dir"], "conn": live.get("conn"),
+                "worker_alive": live.get("worker_alive"),
+                "cli_path": ltxq.cli_of(conf, h) if conf else h["cli_path"],
+            })
+    templates = HERE / "templates"
+    return flask.jsonify(
+        server={"port": STATE["port"], "engine": STATE["engine"],
+                "poll_secs": (conf or {}).get("poll_secs"), "repo": str(HERE),
+                "db": str(ltxq.DB_PATH), "db_bytes": db_bytes,
+                "jobs": jobs, "git": _git_head(),
+                "conf_path": str(ltxq.CONF_PATH), "conf_error": conf_error,
+                "templates": templates.exists()
+                and len(list(templates.glob("*.json"))) or 0},
+        components=components, settings=settings, hosts=hosts)
+
+
 @app.get("/api/events")
 def api_events():
     """SSE stream of job/host/engine state changes (see docs/api.md).
@@ -690,6 +801,7 @@ def api_job(jid):
 
 
 def run_ui(a):
+    STATE["port"] = a.port
     if not STATIC.exists():
         STATIC.mkdir()
     if not (a.no_engine or STATE["engine"]):

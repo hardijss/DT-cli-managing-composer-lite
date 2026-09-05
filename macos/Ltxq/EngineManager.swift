@@ -16,6 +16,24 @@ enum EngineState: Equatable {
     case running(port: Int, mode: EngineMode)
     case stopped
     case failed(reason: String)
+
+    var isRunning: Bool {
+        if case .running = self { return true }
+        return false
+    }
+
+    /// Short human summary for the Settings diagnostics pane.
+    var description: String {
+        switch self {
+        case .idle: return "idle"
+        case .probing: return "probing for a running engine"
+        case .starting: return "starting"
+        case .running(let port, let mode):
+            return "running on port \(port) (\(mode == .owned ? "owned by app" : "external"))"
+        case .stopped: return "stopped"
+        case .failed(let reason): return "failed — \(reason.prefix(80))"
+        }
+    }
 }
 
 /// Owns the engine child process: probe → attach to an existing server, or

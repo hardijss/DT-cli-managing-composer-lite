@@ -1,6 +1,6 @@
 # HTTP API
 
-**API version: 1.1** (see [Versioning](#versioning) at the end).
+**API version: 1.2** (see [Versioning](#versioning) at the end).
 
 The dashboard, the native macOS app, and external job-composition tools are
 all clients of the same localhost API served by `ltxq.py ui` (Flask, in
@@ -49,6 +49,41 @@ assets (JSON string: [{flag, file, local}]), extra_args (JSON string:
 chain, batch` plus computed `bar` (percent) and `elapsed` (seconds).
 Statuses: `queued, uploading, running, collecting, suspect, cancelling,
 cancelled, done, failed`.
+
+### `GET /api/status`  *(since API 1.2)*
+
+Read-only diagnostics snapshot for the dashboard's gear-icon overlay
+("Settings & server status"): the components the server actually uses
+(presence, resolved path, version), the effective `hosts.yaml` settings, and
+an engine + per-host summary. Computed per request; tool versions are cached
+for 10 minutes.
+
+```json
+{"server": {"port": 8765, "engine": true, "poll_secs": 10,
+            "repo": "/path/to/ltxq", "db": "/path/to/ltxq.db",
+            "db_bytes": 393216, "jobs": {"done": 79, "failed": 18},
+            "git": "e3ca75d", "conf_path": "/path/to/hosts.yaml",
+            "conf_error": null, "templates": 2},
+ "components": [{"name": "ffmpeg", "present": true,
+                 "path": "/opt/homebrew/bin/ffmpeg",
+                 "version": "ffmpeg version 6.1.4 ..."},
+                {"name": "ffprobe", ...},
+                {"name": "python", "present": true, "path": "...",
+                 "version": "3.14.3"},
+                {"name": "flask", "present": true, "path": null,
+                 "version": "3.1.3"},
+                {"name": "pyyaml", ...}],
+ "settings": {"cli_path": "~/tod-dt-cli", "poll_secs": 10, "stall_secs": 900,
+              "remote_root": "genwork", "movies_dir": "~/Movies/generations",
+              "use_pty": true, "keep_remote": false, "offline": false,
+              "disable_preview": true, "download_missing": false},
+ "hosts": [{"alias": "ltx-a", "enabled": true, "backend": null, "max_jobs": 1,
+            "models_dir": "...", "conn": "ssh", "worker_alive": true,
+            "cli_path": "~/tod-dt-cli"}]}
+```
+
+`conf_error` is non-null when `hosts.yaml` is missing (settings/hosts may then
+be empty); `templates` counts `templates/*.json` presets.
 
 ## Submitting jobs
 
@@ -192,6 +227,8 @@ data: {"hosts": [{"alias": "ltx-a", "worker_alive": true, ...}]}
 - **1.0** — the original REST endpoints (state, add/regen, per-job, staging,
   hosts) as first documented.
 - **1.1** — adds `GET /api/events` (SSE). No existing endpoint changed.
+- **1.2** — adds `GET /api/status` (diagnostics snapshot). No existing
+  endpoint changed.
 
 Changes are additive: new endpoints, new optional request fields, new
 response fields. Breaking changes would bump the major version and be
