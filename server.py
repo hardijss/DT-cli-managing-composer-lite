@@ -153,7 +153,7 @@ def engine_loop():
                 if busy >= h["max_jobs"]:
                     continue
                 job = con.execute("SELECT * FROM jobs WHERE status='queued' AND "
-                                  "(host IS NULL OR host=?) ORDER BY created_at LIMIT 1",
+                                  "(host IS NULL OR host=?) ORDER BY created_at, rowid LIMIT 1",
                                   (h["alias"],)).fetchone()
                 if job:
                     cur = con.execute("UPDATE jobs SET status='uploading', host=? "
@@ -325,6 +325,7 @@ def api_add():
         parent=None, seed=int(f["seed"]) if f.get("seed") else None,
         new_seed=bool(f.get("new_seed")), ext=f.get("ext") or "mov",
         backend=f.get("backend") or None, chain=chain,
+        batch=(f.get("batch") or "").strip() or None,
         **{attr: None for attr, _ in ltxq.FLAGMAP},
         upload=[], extra_arg=[ea for ea in (f.get("extra_arg") or "").splitlines()
                               if ea.strip()])
@@ -522,7 +523,7 @@ def api_regen(jid):
         name=f.get("name") or None,
         seed=int(f["seed"]) if f.get("seed") else None,
         new_seed=bool(f.get("new_seed")), ext=f.get("ext") or "mov",
-        backend=f.get("backend") or None)
+        backend=f.get("backend") or None, batch=f.get("batch") or None)
     out, err = _capture(ltxq.cmd_regen, ns)
     if err:
         return flask.jsonify(error=err), 400

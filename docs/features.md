@@ -25,7 +25,13 @@
   at launch — the last frame of the newest finished render is extracted
   (ffmpeg) and attached to that slot, so queued batches continue from each
   other; missing source or a manually-filled slot degrades to running without
-  the frame (noted), never failing the render
+  the frame (noted), never failing the render. Jobs carrying a `batch` label
+  scope the lookup to the previous finished job *in the same batch*;
+  unbatched jobs use all finished generations
+- Batch groups: jobs may carry an optional `batch` label (CLI `--batch`, form
+  "Batch" field) — surfaced as a 📦 badge, kept across regen, and used as the
+  chain scope above; dispatch order within a submission burst follows
+  submission order (`created_at, rowid`)
 - Housekeeping: staging artifacts in `jobs/_tmp/` older than 24h pruned;
   remote `worker.log` rotated when it exceeds 10MB (during idle periods) —
   runs in the engine loop and `run`/`reconcile`
@@ -41,7 +47,8 @@
   staged thumbnail → attach as any slot or keyframe
 - Chain continuation checkbox: auto-attach the previous generation's last
   frame as first-frame/image (resolved when the job launches, so batches
-  chain); state remembered between submissions; ⛓ badge on chained jobs
+  chain; scoped to the Batch field when set); state remembered between
+  submissions; ⛓ badge on chained jobs, 📦 badge on batched jobs
 - History: status badges, input thumbnails, View (opens video), Load
   (populates the whole form incl. re-attaching past inputs), Delete
   (record + work files; collected video kept)

@@ -6,6 +6,7 @@ run instructions) lives in the root [README.md](../README.md).
 Topic docs:
 
 - [architecture.md](architecture.md) — folder structure, data flow, external dependencies
+- [api.md](api.md) — HTTP API contract (dashboard / macOS app / external clients)
 - [environment.md](environment.md) — hosts.yaml keys, env vars, CLI flags
 - [features.md](features.md) — full feature list, known issues, TODOs
 - [decisions.md](decisions.md) — design decisions and rationale

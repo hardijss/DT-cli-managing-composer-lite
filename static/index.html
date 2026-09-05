@@ -104,6 +104,7 @@ a { color:var(--acc); text-decoration:none; }
     <textarea id="config_json" class="mono" placeholder='{"steps": 9, "seed": 123}'></textarea>
     <div class="grid">
       <div><label>Name</label><input id="name" placeholder="optional"></div>
+      <div><label>Batch (optional group; chain scopes to it)</label><input id="batch" placeholder="e.g. moodboard-v1"></div>
       <div><label>Seed (empty = keep config / random)</label>
         <div class="row"><input id="seed" type="number" style="width:120px">
         <label style="margin:0"><input type="checkbox" id="new_seed"> new seed</label></div>
@@ -135,7 +136,8 @@ a { color:var(--acc); text-decoration:none; }
 
     <div class="row" style="margin:10px 0 6px">
       <label style="margin:0"><input type="checkbox" id="chain"> Continue from
-        previous generation <span class="sub">(auto-attach its last frame)</span></label>
+        previous generation <span class="sub">(auto-attach its last frame; scoped
+        to the batch when one is set)</span></label>
       <select id="chain_slot" style="width:auto">
         <option value="first_frame">as first-frame</option>
         <option value="image">as image</option>
@@ -331,6 +333,7 @@ function render(d) {
         <span class="badge ${esc(j.status)}">${esc(j.status)}</span>
         <span class="badge">${esc(j.backend||"-")} / ${esc(j.host||"-")}</span>
         ${j.chain ? `<span class="badge" title="continuation: last frame of the previous generation">⛓ ${esc(j.chain)}</span>` : ""}
+        ${j.batch ? `<span class="badge" title="batch group — 'continue from previous' stays inside this batch">📦 ${esc(j.batch)}</span>` : ""}
         <span class="grow"></span>
         <span class="pct">${j.bar}% · ${fmt(j.elapsed)}</span>
         <button class="danger" data-cancel="${esc(j.id)}">Cancel</button>
@@ -374,7 +377,7 @@ function render(d) {
         : "";
       return `<tr>
       <td class="mono">${esc(j.id)}</td>
-      <td>${j.chain ? `<span class="badge" title="continuation: last frame of the previous generation attached as ${esc(j.chain)}">⛓</span> ` : ""}${esc(j.name)}${inputs}</td>
+      <td>${j.chain ? `<span class="badge" title="continuation: last frame of the previous generation attached as ${esc(j.chain)}">⛓</span> ` : ""}${j.batch ? `<span class="badge" title="batch group">📦</span> ` : ""}${esc(j.name)}${inputs}</td>
       <td><span class="badge ${esc(j.status)}">${esc(j.status)}</span></td>
       <td>${esc(j.backend||"-")}</td>
       <td>${j.pct}%</td><td>${fmt(j.elapsed)}</td>
@@ -392,6 +395,7 @@ function render(d) {
         const cfg = JSON.parse(j.config_text || "{}"); delete cfg.seed;
         $("config_json").value = JSON.stringify(cfg, null, 2);
         $("name").value = j.name || "";
+        $("batch").value = j.batch || "";
         const sel = [...$("model").options].find(o => o.value === j.model);
         if (sel) $("model").value = j.model;
         if (j.backend) $("backend").value = j.backend;
@@ -667,6 +671,7 @@ $("addform").onsubmit = async ev => {
   fd.set("prompt", $("prompt").value);
   fd.set("config_json", $("config_json").value || "");
   if ($("name").value)  fd.set("name", $("name").value);
+  if ($("batch").value) fd.set("batch", $("batch").value);
   if ($("seed").value)  fd.set("seed", $("seed").value);
   if ($("new_seed").checked) fd.set("new_seed", "1");
   if ($("chain").checked) {
