@@ -38,5 +38,18 @@ struct DashboardView: NSViewRepresentable {
                 completionHandler(response == .OK ? panel.urls : nil)
             }
         }
+
+        /// WKWebView drops target="_blank" links (history "View", asset images)
+        /// unless the UI delegate handles new-window requests; hand them to the
+        /// default browser instead.
+        func webView(_ webView: WKWebView,
+                     createWebViewWith configuration: WKWebViewConfiguration,
+                     for navigationAction: WKNavigationAction,
+                     windowFeatures: WKWindowFeatures) -> WKWebView? {
+            if let url = navigationAction.request.url {
+                NSWorkspace.shared.open(url)
+            }
+            return nil
+        }
     }
 }

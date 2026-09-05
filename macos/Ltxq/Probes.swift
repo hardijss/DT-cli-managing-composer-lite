@@ -67,11 +67,11 @@ enum ToolProbe {
     static func find(_ name: String) -> Bool {
         if let path = ProcessInfo.processInfo.environment["PATH"] {
             for dir in path.split(separator: ":") {
-                if FileManager.default.isExecutableFile("\(dir)/\(name)") { return true }
+                if FileManager.default.isExecutableFile(atPath: "\(dir)/\(name)") { return true }
             }
         }
         for dir in searchDirs {
-            if FileManager.default.isExecutableFile("\(dir)/\(name)") { return true }
+            if FileManager.default.isExecutableFile(atPath: "\(dir)/\(name)") { return true }
         }
         return false
     }
