@@ -55,6 +55,8 @@ a { color:var(--acc); text-decoration:none; }
 .paused-banner { background:var(--warn); color:#241a05; border-radius:7px;
                  padding:3px 10px; font-size:12px; font-weight:600; }
 .host-row { margin-bottom:6px; }
+.filerow { display:flex; gap:6px; align-items:center; }
+.filerow input[type=file] { flex:1; min-width:0; }
 </style>
 </head>
 <body>
@@ -95,16 +97,16 @@ a { color:var(--acc); text-decoration:none; }
       </div>
     </div>
     <div class="grid">
-      <div><label>Image (--image)</label><input type="file" id="image"></div>
-      <div><label>Audio (--audio)</label><input type="file" id="audio" accept="audio/*"></div>
+      <div><label>Image (--image)</label><div class="filerow"><input type="file" id="image"><button type="button" class="sec" data-clear="image" title="clear selected file" hidden>✕</button></div></div>
+      <div><label>Audio (--audio)</label><div class="filerow"><input type="file" id="audio" accept="audio/*"><button type="button" class="sec" data-clear="audio" title="clear selected file" hidden>✕</button></div></div>
     </div>
     <div class="grid">
-      <div><label>Input video (--input-video)</label><input type="file" id="input_video"></div>
-      <div><label>First frame (--first-frame)</label><input type="file" id="first_frame"></div>
+      <div><label>Input video (--input-video)</label><div class="filerow"><input type="file" id="input_video"><button type="button" class="sec" data-clear="input_video" title="clear selected file" hidden>✕</button></div></div>
+      <div><label>First frame (--first-frame)</label><div class="filerow"><input type="file" id="first_frame"><button type="button" class="sec" data-clear="first_frame" title="clear selected file" hidden>✕</button></div></div>
     </div>
     <div class="grid">
-      <div><label>Middle frame (--middle-frame)</label><input type="file" id="middle_frame"></div>
-      <div><label>Last frame (--last-frame)</label><input type="file" id="last_frame"></div>
+      <div><label>Middle frame (--middle-frame)</label><div class="filerow"><input type="file" id="middle_frame"><button type="button" class="sec" data-clear="middle_frame" title="clear selected file" hidden>✕</button></div></div>
+      <div><label>Last frame (--last-frame)</label><div class="filerow"><input type="file" id="last_frame"><button type="button" class="sec" data-clear="last_frame" title="clear selected file" hidden>✕</button></div></div>
     </div>
     <label>LTX keyframes — image + index (frame number), optional strength:attention
       (e.g. <span class="mono">12</span> or <span class="mono">12:0.8:1.0</span>)</label>
@@ -178,6 +180,7 @@ async function api(path, opts) {
 }
 
 const ACTIVE = ["queued","uploading","running","suspect","cancelling","collecting"];
+const ATTACH_MEDIA = false;   // "+ media" history-row button — hidden, pending revisit
 const openDetails = new Set();
 
 function render(d) {
@@ -365,7 +368,7 @@ function render(d) {
       <td class="note">${esc((j.note||"") + (j.local_out ? " · " + j.local_out : ""))}</td>
       <td><a href="/api/view/${esc(j.id)}" target="_blank">View</a>
           <button class="sec" data-load="${esc(j.id)}">Load</button>
-          <button class="sec" data-attach="${esc(j.id)}" title="attach this job's input files (image / first / middle / last frame, audio, keyframes) on top of the current form — a slot already staged is replaced, the rest is kept">+ media</button>
+          ${ATTACH_MEDIA ? `<button class="sec" data-attach="${esc(j.id)}" title="attach this job's input files (image / first / middle / last frame, audio, keyframes) on top of the current form — a slot already staged is replaced, the rest is kept">+ media</button>` : ""}
           <button class="danger" data-del="${esc(j.id)}">✕</button></td>
     </tr>`; }).join("");
   document.querySelectorAll("[data-load]").forEach(b =>
@@ -480,6 +483,15 @@ function addKfRow() {
 }
 addKfRow();
 $("addkf").onclick = addKfRow;
+// media file inputs: reveal ✕ while a file is chosen so the slot can be cleared
+for (const id of ["image", "audio", "input_video", "first_frame", "middle_frame",
+                  "last_frame"]) {
+  const inp = $(id), clr = document.querySelector(`[data-clear="${id}"]`);
+  if (!clr) continue;
+  const sync = () => { clr.hidden = !inp.value; };
+  inp.addEventListener("change", sync);
+  clr.onclick = () => { inp.value = ""; sync(); };
+}
 function renderStaged() {
   $("staged").innerHTML = staged.map((s, i) => {
     const ext = (s.name.split('.').pop() || '').toLowerCase();

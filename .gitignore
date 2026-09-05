@@ -21,3 +21,4 @@ __pycache__/
 
 # ZCode session data
 .zcode/
+.video_agent/
