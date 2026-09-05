@@ -179,6 +179,12 @@ def engine_loop():
     for j in con.execute("SELECT * FROM jobs WHERE status='uploading'"):
         ltxq.set_job(con, j["id"], status="queued", note="engine restarted; re-upload")
     print(f"[engine] polling every {c['poll_secs']}s")
+    for tool in ("ffmpeg", "ffprobe"):
+        try:
+            ltxq.ff_tool(tool)
+        except RuntimeError as e:
+            print(f"[engine] WARNING: {e} — frame extraction / chain "
+                  "continuation will fail (generation is unaffected)")
     last_gc = 0
     while not STATE["stop"].is_set():
         try:
@@ -541,7 +547,7 @@ def api_extract():
         tmp = STAGE / f"stage_{int(time.time()*1000)}_{j['id']}.tmp.png"
         try:
             n = ltxq.extract_frame(v, str(d.get("frame", "")).strip(), tmp)
-        except (RuntimeError, ValueError) as e:
+        except (RuntimeError, ValueError, OSError) as e:
             tmp.unlink(missing_ok=True)
             return flask.jsonify(error=str(e)), 400
         dst = tmp.with_name(f"stage_{int(time.time()*1000)}_{j['id']}_f{n}.png")

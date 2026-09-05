@@ -635,6 +635,19 @@ def video_of(job):
     vids = sorted(out.glob("*.mov")) + sorted(out.glob("*.mp4"))
     return str(vids[0]) if vids else None
 
+FFTOOL_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "/usr/bin", "/bin")
+
+def ff_tool(name):
+    """Locate ffmpeg/ffprobe even under the minimal PATH a GUI app hands down."""
+    p = shutil.which(name)
+    if p:
+        return p
+    for d in FFTOOL_DIRS:
+        c = Path(d) / name
+        if c.exists():
+            return str(c)
+    raise RuntimeError(f"{name} not found — install ffmpeg (e.g. brew install ffmpeg)")
+
 def extract_frame(v, frame, dst, timeout=120):
     """Extract one frame of video v to PNG dst. frame: int / 'first' / 'last'.
     Returns the extracted frame number; raises RuntimeError/ValueError."""
@@ -642,7 +655,7 @@ def extract_frame(v, frame, dst, timeout=120):
     if fr == "first":
         n = 0
     elif fr == "last":
-        pr = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+        pr = subprocess.run([ff_tool("ffprobe"), "-v", "error", "-select_streams", "v:0",
                              "-count_frames", "-show_entries",
                              "stream=nb_read_frames", "-of", "csv=p=0", v],
                             capture_output=True, text=True, timeout=timeout)
@@ -653,7 +666,7 @@ def extract_frame(v, frame, dst, timeout=120):
         raise ValueError("frame must be a number, 'first' or 'last'")
     else:
         n = int(fr)
-    r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", v,
+    r = subprocess.run([ff_tool("ffmpeg"), "-y", "-v", "error", "-i", v,
                         "-vf", f"select=eq(n\\,{n})", "-frames:v", "1", str(dst)],
                        capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0 or not dst.exists():
@@ -1027,6 +1040,12 @@ def cmd_doctor(a):
         print("  [ok] flask installed")
     except importlib.metadata.PackageNotFoundError:
         print("  [FAIL] flask not installed — `ui` unavailable"); ok = False
+    for tool in ("ffmpeg", "ffprobe"):
+        try:
+            ff_tool(tool)
+            print(f"  [ok] {tool} available")
+        except RuntimeError as e:
+            chk(f"{tool} available", False, str(e))
     print("doctor:", "PASS" if ok else "FAIL")
 
 def cmd_ui(a):
