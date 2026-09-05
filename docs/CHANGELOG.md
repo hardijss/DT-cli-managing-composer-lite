@@ -2,7 +2,10 @@
 
 All notable changes, bug fixes, and feature additions to `ltxq` are documented here.
 
-## [Unreleased] - 2026-09-04
+## [Unreleased] - 2026-09-05
+
+### Changed
+- **Media slots: drag & drop + paste + click-to-browse (`static/index.html`)**: The six media file inputs (image, audio, input video, first/middle/last frame) and the dynamic keyframe rows are replaced by drop-tile slots. Clicking a tile still opens the OS file dialog via the unchanged hidden `<input type=file>` (so `accept` filtering and the multipart submit path are untouched), files can now be dragged from Finder onto a tile, and a paste with a file on the clipboard (e.g. a screenshot) fills the last-clicked/hovered tile, defaulting to `--image` when none was touched. Wrong-type drops/pastes are refused with a flash message instead of silently filling the slot; filled tiles show the filename, an image thumbnail for images, and keep the ✕ clear button. Text drag/paste into the prompt/config fields is unaffected, and the staging-badge area (Extract & attach / + media) is unchanged.
 
 ### Added
 - **"+ media" attach button on history rows (`static/index.html`)**: Variant of the history Load button that pulls a past job's input files (`--image`, `--first-frame`, `--middle-frame`, `--last-frame`, `--audio`, `--input-video`, keyframes, plain uploads) into the staging area *on top of* the current form — without overwriting the prompt/config or wiping already-staged files. A slot the job also provides (e.g. first-frame) replaces its earlier staged entry so submit uses exactly what the badges show; keyframes/uploads accumulate. The re-staging logic was factored out of Load into a shared `attachJobAssets(j, replace)` used by both buttons (Load keeps its full-replace behavior).

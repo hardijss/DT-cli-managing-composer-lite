@@ -56,7 +56,20 @@ a { color:var(--acc); text-decoration:none; }
                  padding:3px 10px; font-size:12px; font-weight:600; }
 .host-row { margin-bottom:6px; }
 .filerow { display:flex; gap:6px; align-items:center; }
-.filerow input[type=file] { flex:1; min-width:0; }
+.filedrop { flex:1; min-width:0; display:flex; align-items:center; gap:8px;
+        border:1.5px dashed var(--edge); border-radius:7px; padding:6px 10px;
+        min-height:34px; cursor:pointer; color:var(--dim); font-size:12px;
+        margin:0; }
+.filedrop:hover, .filedrop:focus-visible { border-color:var(--acc); }
+.filedrop.over { border-color:var(--acc); background:rgba(79,156,249,.10); }
+.filedrop.filled { border-style:solid; color:var(--fg); }
+.filedrop input[type=file] { position:absolute; width:1px; height:1px;
+        opacity:0; pointer-events:none; }
+.filedrop .dz-label { flex:1; min-width:0; overflow:hidden;
+        text-overflow:ellipsis; white-space:nowrap; pointer-events:none; }
+.filedrop .dz-thumb { width:28px; height:28px; object-fit:cover;
+        border-radius:4px; pointer-events:none; display:none; }
+.filedrop.filled .dz-thumb[src]:not([src=""]) { display:block; }
 </style>
 </head>
 <body>
@@ -97,16 +110,16 @@ a { color:var(--acc); text-decoration:none; }
       </div>
     </div>
     <div class="grid">
-      <div><label>Image (--image)</label><div class="filerow"><input type="file" id="image"><button type="button" class="sec" data-clear="image" title="clear selected file" hidden>✕</button></div></div>
-      <div><label>Audio (--audio)</label><div class="filerow"><input type="file" id="audio" accept="audio/*"><button type="button" class="sec" data-clear="audio" title="clear selected file" hidden>✕</button></div></div>
+      <div><label>Image (--image)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="image"><input type="file" id="image" accept="image/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="image" title="clear selected file" hidden>✕</button></div></div>
+      <div><label>Audio (--audio)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="audio"><input type="file" id="audio" accept="audio/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="audio" title="clear selected file" hidden>✕</button></div></div>
     </div>
     <div class="grid">
-      <div><label>Input video (--input-video)</label><div class="filerow"><input type="file" id="input_video"><button type="button" class="sec" data-clear="input_video" title="clear selected file" hidden>✕</button></div></div>
-      <div><label>First frame (--first-frame)</label><div class="filerow"><input type="file" id="first_frame"><button type="button" class="sec" data-clear="first_frame" title="clear selected file" hidden>✕</button></div></div>
+      <div><label>Input video (--input-video)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="input_video"><input type="file" id="input_video" accept="video/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="input_video" title="clear selected file" hidden>✕</button></div></div>
+      <div><label>First frame (--first-frame)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="first_frame"><input type="file" id="first_frame" accept="image/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="first_frame" title="clear selected file" hidden>✕</button></div></div>
     </div>
     <div class="grid">
-      <div><label>Middle frame (--middle-frame)</label><div class="filerow"><input type="file" id="middle_frame"><button type="button" class="sec" data-clear="middle_frame" title="clear selected file" hidden>✕</button></div></div>
-      <div><label>Last frame (--last-frame)</label><div class="filerow"><input type="file" id="last_frame"><button type="button" class="sec" data-clear="last_frame" title="clear selected file" hidden>✕</button></div></div>
+      <div><label>Middle frame (--middle-frame)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="middle_frame"><input type="file" id="middle_frame" accept="image/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="middle_frame" title="clear selected file" hidden>✕</button></div></div>
+      <div><label>Last frame (--last-frame)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="last_frame"><input type="file" id="last_frame" accept="image/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="last_frame" title="clear selected file" hidden>✕</button></div></div>
     </div>
     <label>LTX keyframes — image + index (frame number), optional strength:attention
       (e.g. <span class="mono">12</span> or <span class="mono">12:0.8:1.0</span>)</label>
@@ -472,26 +485,116 @@ async function attachJobAssets(j, replace) {
   return n;
 }
 
+// Media slots + keyframe rows share one dropzone behaviour: click opens the OS
+// file dialog, files can be dragged onto the tile, and a paste with files on the
+// clipboard fills the last-clicked/hovered tile (default: Image). Wrong-type
+// files are refused with a flash. The hidden <input type=file> and the ✕ clear
+// buttons keep their old semantics; submit still reads input.files.
+const SLOTS = ["image", "audio", "input_video", "first_frame", "middle_frame",
+               "last_frame"];
+const DZTYPES = {
+  image: [["image/"], ["png","jpg","jpeg","webp","gif"]],
+  audio: [["audio/"], ["mp3","wav","ogg","m4a","flac","aac"]],
+  input_video: [["video/"], ["mp4","mov","webm","mkv","avi"]],
+  kf:    [["image/"], ["png","jpg","jpeg","webp","gif"]],
+};
+let pasteTarget = null;   // last interacted dropzone; falls back to Image
+
+function dzName(dz) {
+  if (dz.dataset.kf !== undefined) return "keyframe";
+  const wrap = dz.closest(".filerow");
+  const lbl = wrap && wrap.parentElement.querySelector(":scope > label");
+  return lbl ? lbl.textContent.trim() : dz.dataset.dz;
+}
+function acceptsFile(dz, f) {
+  const [prefixes, exts] = DZTYPES[dz.dataset.kf !== undefined ? "kf" : dz.dataset.dz];
+  if (f.type) return prefixes.some(p => f.type.startsWith(p));
+  const ext = (f.name.split(".").pop() || "").toLowerCase();
+  return exts.includes(ext);
+}
+function dzSync(dz) {
+  const inp = dz.querySelector("input[type=file]");
+  const f = inp.files[0];
+  dz.classList.toggle("filled", !!f);
+  dz.querySelector(".dz-label").textContent =
+    f ? f.name : "drop, paste, or click to browse";
+  const thumb = dz.querySelector(".dz-thumb");
+  if (thumb.src) { URL.revokeObjectURL(thumb.src); thumb.src = ""; }
+  if (f && f.type.startsWith("image/")) thumb.src = URL.createObjectURL(f);
+}
+function setDzFile(dz, f) {
+  if (!acceptsFile(dz, f))
+    return flash(`${f.name || "clipboard"}: wrong file type for ${dzName(dz)}`, true);
+  const inp = dz.querySelector("input[type=file]");
+  const dt = new DataTransfer(); dt.items.add(f);
+  inp.files = dt.files;
+  dzSync(dz);
+  inp.dispatchEvent(new Event("change", {bubbles: false}));
+}
+function wireDropzone(dz) {
+  const inp = dz.querySelector("input[type=file]");
+  dz.addEventListener("click", () => { pasteTarget = dz; });
+  dz.addEventListener("mouseenter", () => { pasteTarget = dz; });
+  dz.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); inp.click(); }
+  });
+  dz.addEventListener("dragover", e => {
+    if (![...e.dataTransfer.types].includes("Files")) return;
+    e.preventDefault(); dz.classList.add("over");
+  });
+  dz.addEventListener("dragleave", () => dz.classList.remove("over"));
+  dz.addEventListener("drop", e => {
+    dz.classList.remove("over");
+    if (!e.dataTransfer.files.length) return;   // ignore non-file drags
+    e.preventDefault();
+    setDzFile(dz, e.dataTransfer.files[0]);
+  });
+  inp.addEventListener("change", () => dzSync(dz));
+  dzSync(dz);
+}
+document.addEventListener("paste", ev => {
+  const files = [...(ev.clipboardData?.files || [])];
+  if (!files.length) return;                    // plain text paste: leave alone
+  const t = ev.target;
+  if (t && (t.tagName === "TEXTAREA" ||
+            (t.tagName === "INPUT" && t.type !== "file"))) return;
+  const dz = (pasteTarget && document.contains(pasteTarget)) ? pasteTarget
+           : document.querySelector('[data-dz="image"]');
+  ev.preventDefault();
+  setDzFile(dz, files[0]);
+});
+
 function addKfRow() {
   const row = document.createElement("div"); row.className = "row";
-  row.innerHTML = `<input type="file" accept="image/*" style="flex:1">
+  row.innerHTML = `<label class="filedrop" tabindex="0" data-kf>
+      <input type="file" accept="image/*">
+      <img class="dz-thumb" alt=""><span class="dz-label"></span></label>
     <input type="text" class="mono" placeholder="index[:strength[:att]] e.g. 12:0.8"
-           style="width:190px">
+           style="width:190px; flex:0 0 auto">
     <button type="button" class="sec">✕</button>`;
-  row.querySelector("button").onclick = () => row.remove();
+  row.querySelector("button").onclick = () => {
+    if (pasteTarget === row.querySelector(".filedrop")) pasteTarget = null;
+    row.remove();
+  };
+  wireDropzone(row.querySelector(".filedrop"));
   $("keyframes").appendChild(row);
 }
 addKfRow();
 $("addkf").onclick = addKfRow;
-// media file inputs: reveal ✕ while a file is chosen so the slot can be cleared
-for (const id of ["image", "audio", "input_video", "first_frame", "middle_frame",
-                  "last_frame"]) {
-  const inp = $(id), clr = document.querySelector(`[data-clear="${id}"]`);
-  if (!clr) continue;
-  const sync = () => { clr.hidden = !inp.value; };
+// per-slot drop tiles; ✕ reveals while a file is staged so the slot can be cleared
+for (const id of SLOTS) {
+  const inp = $(id), dz = document.querySelector(`[data-dz="${id}"]`);
+  const clr = document.querySelector(`[data-clear="${id}"]`);
+  wireDropzone(dz);
+  const sync = () => { clr.hidden = !inp.files.length; };
   inp.addEventListener("change", sync);
-  clr.onclick = () => { inp.value = ""; sync(); };
+  clr.onclick = () => {
+    inp.value = "";
+    inp.files = new DataTransfer().files;
+    dzSync(dz); sync();
+  };
 }
+pasteTarget = document.querySelector('[data-dz="image"]');
 function renderStaged() {
   $("staged").innerHTML = staged.map((s, i) => {
     const ext = (s.name.split('.').pop() || '').toLowerCase();
