@@ -4,6 +4,9 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
 
 ## [Unreleased] - 2026-09-05
 
+### Docs
+- **README consolidation (`README.md`, `docs/README.md`)**: The near-empty root README (wrong project name, 4 lines) is replaced by the full project overview — promoted from `docs/README.md` and expanded with prerequisites, install (`venv` + `requirements.txt`, previously undocumented), a minimal `hosts.yaml` getting-started example, a troubleshooting pointer to `doctor`, license badge/link, and `docs/` links. `docs/README.md` is now a short documentation index pointing at the root README. The prerequisites now name `tod-dt-cli` explicitly as the [DrawOtherThings CustomCLI](https://github.com/wee-todd/DrawOtherThings/tree/main/Documentation/CustomCLI) community fork (required for the LTX-2.3 features the official `draw-things-cli` lacks), replacing an initial link to the official Homebrew package.
+
 ### Changed
 - **Media slots: drag & drop + paste + click-to-browse (`static/index.html`)**: The six media file inputs (image, audio, input video, first/middle/last frame) and the dynamic keyframe rows are replaced by drop-tile slots. Clicking a tile still opens the OS file dialog via the unchanged hidden `<input type=file>` (so `accept` filtering and the multipart submit path are untouched), files can now be dragged from Finder onto a tile, and a paste with a file on the clipboard (e.g. a screenshot) fills the last-clicked/hovered tile, defaulting to `--image` when none was touched. Wrong-type drops/pastes are refused with a flash message instead of silently filling the slot; filled tiles show the filename, an image thumbnail for images, and keep the ✕ clear button. Text drag/paste into the prompt/config fields is unaffected, and the staging-badge area (Extract & attach / + media) is unchanged.
 
