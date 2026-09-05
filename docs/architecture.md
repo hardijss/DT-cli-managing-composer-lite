@@ -68,3 +68,37 @@ both acquire it). Within the engine, dispatch uses an atomic
 `UPDATE…WHERE status='queued'` claim so a web `add` racing the loop can't
 double-launch. The Flask server and engine share the process; DB access is
 short-transaction, WAL-mode.
+
+## State on disk & cleanup
+
+All persistent state lives inside the repo checkout (next to `ltxq.py` —
+`HERE`-relative, so a second clone is a second independent queue):
+
+| Path | What it is | Safe to delete? |
+|---|---|---|
+| `ltxq.db` | SQLite (WAL mode) — the only state store: jobs, hosts, probe results | yes, when the engine is stopped; recreated empty on next start |
+| `ltxq.db-wal` / `ltxq.db-shm` | WAL write-ahead log + shared-memory side files | only **together with** `ltxq.db` |
+| `engine.lock` | flock target; content is irrelevant | harmless; recreated |
+| `.ssh_mux/` | ControlMaster socket dir for ssh muxing | yes, while no job is running |
+| `jobs/<id>/` | per-job input copies (prompt, config, assets, runner.sh, `.req`) | yes — but deleting the db **doesn't** delete these, and vice versa |
+| `jobs/_tmp/` | staging uploads / extracted frames; auto-pruned after 24 h | auto-managed |
+| `~/Movies/generations/` (or your `movies_dir`) | collected outputs with `metadata.json` | your rendered videos — keep or delete at will |
+
+On each **render host**: `~/genwork/` (worker dir + job dirs) is scratch
+space, recreated as needed; your model files and `tod-dt-cli` live elsewhere
+and are never touched by cleanup.
+
+**Resetting the queue** (wipe history, keep the install):
+
+1. Stop the engine — quit the Ltxq app or Ctrl-C `ui`/`run` (check
+   `ps aux | grep ltxq.py`; the `engine.lock` flock must be released).
+2. Delete all three db files together: `rm -f ltxq.db ltxq.db-wal ltxq.db-shm`.
+   Deleting only the main file while a stale `-wal` exists can corrupt the
+   fresh database. Never delete them mid-run.
+3. Optional: delete `jobs/` to reclaim the input copies. Remote job dirs are
+   cleaned per job anyway unless `keep_remote` was set — check hosts'
+   `~/genwork/jobs/` if you used it.
+
+Job *records* and job *artifacts* are deliberately separate: resetting the
+db doesn't touch collected videos in `movies_dir`, and deleting videos
+doesn't affect the db.

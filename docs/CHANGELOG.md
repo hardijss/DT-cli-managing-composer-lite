@@ -4,6 +4,15 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
 
 ## [Unreleased] - 2026-09-05
 
+### Docs: state-on-disk cleanup + uninstall guide
+
+- **`docs/architecture.md`** gained a "State on disk & cleanup" section: a table of every persistent artifact (where the SQLite db and its `-wal`/`-shm` side files live — all `HERE`-relative inside the repo, plus `engine.lock`, `.ssh_mux/`, `jobs/`, staging, `movies_dir`, and remote `~/genwork`), a step-by-step queue reset (stop engine first, delete all three db files together — never mid-run and never the main file alone), and the records-vs-artifacts separation (resetting the db keeps collected videos; deleting videos keeps the db).
+- **`README.md`** gained an Uninstall section (stop engine → `serve-stop` → delete repo checkout → optional `movies_dir` / `~/genwork` / macOS-app cleanup incl. `~/Library/Application Support/Ltxq/` and the `local.ltxq.app` preferences plist) and a troubleshooting pointer to the reset procedure. Docs-only change; no code touched.
+
+### Docs: dedicated oneshot vs serve backend page
+
+- **New `docs/backends.md`**, linked from `README.md` and `docs/README.md`: explains how a job's backend is chosen (job override → host `backend:` key → `oneshot` default), the full setup and lifecycle of each backend (oneshot: per-job runner upload/PTY/poll/collect; serve: `serve-start`, FIFO + holder + worker.log protocol, absolute-path constraint, requeue-with-note when the worker is down), cancel semantics, idle-policy auto stop/restart of the serve worker, and a performance comparison (model load per job vs resident worker, RAM footprint, failure isolation) with guidance on when to use which and cautions on mixing both on one host. Docs-only change; no code touched. Also added the previously undocumented per-host `backend` key to the `docs/environment.md` hosts.yaml table.
+
 ### hosts.yaml → user config location + live reload (macOS-app-friendly)
 
 - **Config path resolution (`ltxq.py`)**: `CONF_PATH` is no longer hard-wired to the repo root. New `_resolve_conf_path()` search order: `$LTXQ_CONF` env override → repo `hosts.yaml` (existing CLI setups unchanged) → `~/Library/Application Support/Ltxq/hosts.yaml`. When nothing exists yet, `hosts.yaml.example` is seeded into the Application Support location on first start, so a fresh install always has an editable file. Added `conf_changed()` mtime helper for the engine loops.

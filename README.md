@@ -124,9 +124,36 @@ Run `./venv/bin/python ltxq.py doctor` — it self-checks the database, ssh
 reachability, remote shell, worker liveness, and Flask presence. Job state
 lives in `ltxq.db` (SQLite, WAL), job inputs in `jobs/<id>/`.
 
+To reset the queue (wipe job history, keep the install): stop the engine,
+then `rm -f ltxq.db ltxq.db-wal ltxq.db-shm` — see
+[docs/architecture.md](docs/architecture.md) ("State on disk & cleanup")
+for what each file is and what resetting does and doesn't delete.
+
+## Uninstall
+
+1. **Stop the engine** — quit the Ltxq app, or Ctrl-C any `ui` / `run`
+   process.
+2. **Stop serve workers** (if you used the serve backend):
+   `./venv/bin/python ltxq.py serve-stop <alias>` per host — or just delete
+   the scratch dir on each render host in step 5.
+3. **Delete the repo checkout** — everything local lives inside it: the
+   venv, `ltxq.db*` (queue state), `jobs/` (input copies), `.ssh_mux/`,
+   `engine.lock`.
+4. **Delete collected outputs** if you don't want them: the `movies_dir`
+   from your `hosts.yaml` (default `~/Movies/generations/`). Note your
+   Draw Things models are elsewhere and are not touched.
+5. **Clean render hosts** (ssh hosts you no longer use): `rm -rf ~/genwork`
+   on each — scratch space only, recreated if you ever return.
+6. **macOS app** (if installed): remove `Ltxq.app` from `/Applications`,
+   then delete its per-user files:
+   `~/Library/Application Support/Ltxq/` (holds `hosts.yaml` if you used
+   the app-managed config) and `~/Library/Preferences/local.ltxq.app.plist`
+   (window/port preferences).
+
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md) — folder structure, data flow, external dependencies
+- [docs/backends.md](docs/backends.md) — oneshot vs serve backends: setup, lifecycle, performance trade-offs
 - [docs/environment.md](docs/environment.md) — hosts.yaml keys, env vars, CLI flags
 - [docs/features.md](docs/features.md) — full feature list, known issues, TODOs
 - [docs/decisions.md](docs/decisions.md) — design decisions and rationale
