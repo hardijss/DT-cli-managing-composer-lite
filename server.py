@@ -3,6 +3,7 @@
 Run: ./venv/bin/python ltxq.py ui [--port 8765] [--no-engine]
 """
 import argparse, contextlib, gc, io, json, re, shlex, threading, time
+from collections import deque
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -25,6 +26,58 @@ STATE = {
     "lock": threading.Lock(),
     "host_paused": {},          # alias -> {paused: bool, release_at: int|None}
 }
+
+
+# ---------------------------------------------------------------- event stream
+# In-process fan-out for GET /api/events (SSE). Each subscriber gets its own
+# bounded queue; publishers never block (oldest events are dropped on
+# overflow and a `refresh` event asks the client to re-fetch /api/state).
+# There is no replay: on (re)connect the client gets a `hello` snapshot.
+
+class _EventBus:
+    def __init__(self, maxlen=1000):
+        self._cv = threading.Condition()
+        self._subs = {}                     # token -> deque of (event, data)
+        self._maxlen = maxlen
+
+    def subscribe(self):
+        token = object()
+        with self._cv:
+            self._subs[token] = deque(maxlen=self._maxlen)
+        return token
+
+    def unsubscribe(self, token):
+        with self._cv:
+            self._subs.pop(token, None)
+
+    def publish(self, event, data):
+        with self._cv:
+            for q in self._subs.values():
+                if len(q) >= q.maxlen:
+                    q.clear()
+                    q.append(("refresh", {"reason": "overflow"}))
+                q.append((event, data))
+            self._cv.notify_all()
+
+    def pop(self, token, timeout=15.0):
+        """Pop the oldest queued event, or None after `timeout` seconds idle."""
+        with self._cv:
+            q = self._subs.get(token)
+            if q is None:
+                return None
+            if not q:
+                self._cv.wait(timeout)
+                q = self._subs.get(token)   # unsubscribed while waiting
+                if q is None or not q:
+                    return None
+            return q.popleft()
+
+
+EVENTS = _EventBus()
+
+
+def _sse(event, data):
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
 # ---------------------------------------------------------------- idle policy
@@ -122,6 +175,7 @@ def _dispatch_allowed(alias):
 def engine_loop():
     c, con = ltxq.conf(), ltxq.db(); ltxq.sync_hosts(con)
     STATE["engine"] = True
+    EVENTS.publish("engine", {"engine": True})
     for j in con.execute("SELECT * FROM jobs WHERE status='uploading'"):
         ltxq.set_job(con, j["id"], status="queued", note="engine restarted; re-upload")
     print(f"[engine] polling every {c['poll_secs']}s")
@@ -160,9 +214,14 @@ def engine_loop():
                                       "WHERE id=? AND status='queued'", (h["alias"], job["id"]))
                     con.commit()
                     if cur.rowcount:
+                        EVENTS.publish("job", {"job": jrow(con.execute(
+                            "SELECT * FROM jobs WHERE id=?", (job["id"],)).fetchone())})
                         ltxq.launch(c, con, h, job)
             try:
-                STATE["hosts"] = host_states(con)
+                new_hosts = host_states(con)
+                if new_hosts != STATE["hosts"]:
+                    STATE["hosts"] = new_hosts
+                    EVENTS.publish("host", {"hosts": _hosts_view(con)})
             except Exception as e:
                 print("[engine] host_states error:", repr(e))
         except Exception as e:
@@ -170,6 +229,7 @@ def engine_loop():
         STATE["stop"].wait(c["poll_secs"])
     con.close()
     STATE["engine"] = False
+    EVENTS.publish("engine", {"engine": False})
     print("[engine] stopped")
 
 
@@ -247,6 +307,58 @@ def jrow(j):
     return d
 
 
+def _job_event(con, jid, kw):
+    """ltxq.JOB_WATCHERS callback: after every committed job mutation, push
+    the fresh row to SSE clients (same shape as GET /api/job/<jid>)."""
+    j = con.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
+    if j:
+        EVENTS.publish("job", {"job": jrow(j)})
+
+
+ltxq.JOB_WATCHERS.append(_job_event)
+
+
+def _publish_job(jid):
+    """Emit a job event for mutations that bypass set_job (insert/delete)."""
+    if not jid_ok(jid):
+        return
+    with contextlib.closing(ltxq.db()) as con:
+        j = con.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
+        if j:
+            EVENTS.publish("job", {"job": jrow(j)})
+
+
+def _publish_hosts():
+    """Emit a host event (pause/resume changes paused state immediately,
+    before the engine's next snapshot)."""
+    with contextlib.closing(ltxq.db()) as con:
+        EVENTS.publish("host", {"hosts": _hosts_view(con)})
+
+
+def _hosts_view(con):
+    """The `hosts` array of /api/state, reused for hello/host SSE events."""
+    hosts = []
+    for h in con.execute("SELECT * FROM hosts WHERE enabled=1"):
+        hp = STATE["host_paused"].get(h["alias"], {})
+        hosts.append({
+            "alias": h["alias"], "models_dir": h["models_dir"],
+            "max_jobs": h["max_jobs"], "backend": h["backend"],
+            "idle": STATE["idle"].get(h["alias"], {}),
+            "paused": bool(hp.get("paused")),
+            "release_at": hp.get("release_at"),
+            **STATE["hosts"].get(h["alias"], {}),
+        })
+    return hosts
+
+
+def state_dict():
+    with contextlib.closing(ltxq.db()) as con:
+        jobs = [jrow(j) for j in con.execute(
+            "SELECT * FROM jobs ORDER BY created_at DESC LIMIT 50")]
+        return {"jobs": jobs, "hosts": _hosts_view(con),
+                "engine": STATE["engine"], "now": int(time.time())}
+
+
 @app.get("/")
 def index():
     return flask.send_from_directory(STATIC, "index.html")
@@ -254,23 +366,33 @@ def index():
 
 @app.get("/api/state")
 def api_state():
-    with contextlib.closing(ltxq.db()) as con:
-        jobs = [jrow(j) for j in con.execute(
-            "SELECT * FROM jobs ORDER BY created_at DESC LIMIT 50")]
-        now = int(time.time())
-        hosts = []
-        for h in con.execute("SELECT * FROM hosts WHERE enabled=1"):
-            hp = STATE["host_paused"].get(h["alias"], {})
-            hosts.append({
-                "alias": h["alias"], "models_dir": h["models_dir"],
-                "max_jobs": h["max_jobs"], "backend": h["backend"],
-                "idle": STATE["idle"].get(h["alias"], {}),
-                "paused": bool(hp.get("paused")),
-                "release_at": hp.get("release_at"),
-                **STATE["hosts"].get(h["alias"], {}),
-            })
-        return flask.jsonify(jobs=jobs, hosts=hosts, engine=STATE["engine"],
-                             now=now)
+    return flask.jsonify(**state_dict())
+
+
+@app.get("/api/events")
+def api_events():
+    """SSE stream of job/host/engine state changes (see docs/api.md).
+    Bootstrap: a `hello` event with the full /api/state payload; then `job`,
+    `job_removed`, `host`, `engine` events as state changes. A `: ping`
+    comment every ~15 s keeps intermediaries from timing out the stream."""
+    token = EVENTS.subscribe()
+
+    def gen():
+        try:
+            yield "retry: 2000\n\n"
+            yield _sse("hello", state_dict())
+            while True:
+                item = EVENTS.pop(token, timeout=15.0)
+                if item is None:
+                    yield ": ping\n\n"
+                else:
+                    yield _sse(*item)
+        finally:
+            EVENTS.unsubscribe(token)
+
+    return flask.Response(gen(), mimetype="text/event-stream",
+                          headers={"Cache-Control": "no-cache",
+                                   "X-Accel-Buffering": "no"})
 
 
 def _capture(fn, *args_):
@@ -376,6 +498,8 @@ def api_add():
     if err:
         return flask.jsonify(error=err), 400
     jid = out.splitlines()[-1].split()[-1] if out else None
+    if jid:
+        _publish_job(jid)
     return flask.jsonify(jid=jid, warnings=out)
 
 
@@ -475,6 +599,7 @@ def api_delete(jid):
             _sh.rmtree(j["local_out"], ignore_errors=True)
         _sh.rmtree(HERE / "jobs" / jid, ignore_errors=True)
         con.execute("DELETE FROM jobs WHERE id=?", (jid,)); con.commit()
+    EVENTS.publish("job_removed", {"id": jid})
     return flask.jsonify(ok=True)
 
 
@@ -501,6 +626,7 @@ def api_queue_pause(alias):
     msg = (f"paused; scheduled release at epoch {release_at}"
            if release_at else "paused indefinitely")
     print(f"[queue] {alias}: {msg}")
+    _publish_hosts()
     return flask.jsonify(ok=True, alias=alias, paused=True, release_at=release_at)
 
 
@@ -509,6 +635,7 @@ def api_queue_resume(alias):
     """Resume dispatch to a host immediately, clearing any scheduled release."""
     STATE["host_paused"].setdefault(alias, {}).update(paused=False, release_at=None)
     print(f"[queue] {alias}: manually resumed")
+    _publish_hosts()
     return flask.jsonify(ok=True, alias=alias, paused=False)
 
 
@@ -527,7 +654,10 @@ def api_regen(jid):
     out, err = _capture(ltxq.cmd_regen, ns)
     if err:
         return flask.jsonify(error=err), 400
-    return flask.jsonify(jid=out.splitlines()[-1].split()[-1] if out else None)
+    jid = out.splitlines()[-1].split()[-1] if out else None
+    if jid:
+        _publish_job(jid)
+    return flask.jsonify(jid=jid)
 
 
 @app.get("/api/models/<alias>")

@@ -1,6 +1,7 @@
 # Target goals: native macOS app (plan of record)
 
-> **Status: Phase 0 complete** (see `macos/README.md`); Phases 1+ not started.
+> **Status: Phase 0 complete** (see `macos/README.md`); Phase 1 complete
+> (`GET /api/events` SSE + `docs/api.md` v1.1); Phases 2+ not started.
 > This document is the starter plan for the ltxq native macOS app. It is
 > written to be self-contained: paste or attach it into a fresh chat and work
 > can begin from any phase without other context. Each phase ends at a
@@ -93,14 +94,14 @@ instead of polling only, and a written API spec.
 
 ### Deliverables
 
-- [ ] `GET /api/events` — SSE endpoint streaming job-state changes (event
+- [x] `GET /api/events` — SSE endpoint streaming job-state changes (event
       payload = the same job object `/api/job/<jid>` returns, plus host
       health changes). Purely additive; 2s polling keeps working.
-- [ ] `docs/api.md` — every endpoint (request/response shapes, error
+- [x] `docs/api.md` — every endpoint (request/response shapes, error
       semantics, the SSE event format), marked with an API version.
-- [ ] Decision record appended to `docs/decisions.md` (Mac-only, tier 2,
+- [x] Decision record appended to `docs/decisions.md` (Mac-only, tier 2,
       monorepo — i.e. the Decisions section above).
-- [ ] `docs/CHANGELOG.md` entry for the SSE endpoint.
+- [x] `docs/CHANGELOG.md` entry for the SSE endpoint.
 
 ### Done when
 

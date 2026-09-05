@@ -94,3 +94,18 @@ output, ffmpeg failure) or a slot already filled manually never fails the
 render — the job runs without the frame and the note says why. Parallel hosts
 claiming flagged jobs in the same instant both continue from the same
 predecessor; chains assume serial execution (`max_jobs` 1 per host).
+
+## 15. Native macOS app: Mac-only, Tier 2, monorepo
+The native app is macOS-only (no iOS targets) — this frees the app to *host*
+the engine instead of being a thin remote client. Architecture is "Tier 2":
+a native SwiftUI UI plus the existing Python engine launched as a child
+process (`venv/bin/python ltxq.py ui`); the engine is not ported to Swift
+(a WebView shell was rejected as the end state, a full Swift port as not
+worth the effort for a personal tool). The Xcode project lives in `macos/`
+in this repo so app and engine advance together, coupled only through the
+HTTP API — which is why the API got a written contract (`docs/api.md`) and
+an SSE event stream instead of 2s polling. The app is non-sandboxed (it
+spawns `ssh`/`rsync` and writes `~/Movies`) and distributed outside the Mac
+App Store. The web dashboard stays as a permanent fallback: all server
+changes are additive and the existing UI must keep working at every
+checkpoint. Full plan: `docs/macos-app-plan.md`.

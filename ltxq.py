@@ -250,11 +250,19 @@ def run_cmd(alias, cmd, timeout=60):
 def ssh(alias, cmd, timeout=60):
     return run_cmd(alias, cmd, timeout)
 
+# Callables(con, jid, kw) invoked after each committed set_job. Additive hook
+# for the ui's SSE event stream (server.py registers a watcher); the CLI
+# registers none and behavior is unchanged.
+JOB_WATCHERS = []
+
 def set_job(con, jid, **kw):
     if kw:
         con.execute(f"UPDATE jobs SET {','.join(k + '=?' for k in kw)} WHERE id=?",
                     list(kw.values()) + [jid])
         con.commit()
+        for w in list(JOB_WATCHERS):
+            try: w(con, jid, kw)
+            except Exception as e: print("job watcher error:", repr(e))
 
 def dollar_home(p):
     return "$HOME/" + p[2:] if p.startswith("~/") else p

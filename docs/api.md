@@ -1,5 +1,7 @@
 # HTTP API
 
+**API version: 1.1** (see [Versioning](#versioning) at the end).
+
 The dashboard, the native macOS app, and external job-composition tools are
 all clients of the same localhost API served by `ltxq.py ui` (Flask, in
 `server.py`). This document is the contract between them; changes are
@@ -133,3 +135,65 @@ done
 The CLI (`python3 ltxq.py add ...`) is the other supported submission path
 and accepts the same fields (`--batch`, `--chain`, `--upload`,
 `--extra-arg "@file@"`, ...); use whichever matches the client.
+
+## Event stream (SSE)
+
+### `GET /api/events`  *(since API 1.1)*
+
+A [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events)
+stream (`Content-Type: text/event-stream`) pushing state changes as they
+happen, so clients don't have to poll `/api/state`. Polling remains fully
+supported — this endpoint is additive and the two can be combined (SSE for
+push, `/api/state` for reconciliation).
+
+Behavior:
+
+- **No replay.** Events are fire-and-forget; there is no history or
+  `Last-Event-ID` support. On every (re)connect the stream first emits a
+  `hello` event containing a full `/api/state` snapshot, so a client that
+  reconnects simply re-bootstraps from it. The stream also emits `retry:
+  2000` so browsers reconnect automatically.
+- **Keep-alive.** A `: ping` comment is written every ~15 s when idle;
+  treat a missing ping as a dead connection (EventSource does this via its
+  own timeout logic; hand-rolled clients should too).
+- **Order.** Events are delivered in the order they were published, per
+  connection. Progress ticks (`pct` updates) arrive as `job` events, so a
+  running job streams live progress.
+
+Event types (`event:` field / `data:` JSON):
+
+| event | data | when |
+|---|---|---|
+| `hello` | same JSON as `GET /api/state` (`{"jobs", "hosts", "engine", "now"}`) | first event after every connect |
+| `job` | `{"job": {job}}` — the same object `GET /api/job/<jid>` returns | every committed job change (status, `pct`, `note`, ...), including creation via `/api/add` and the `queued → uploading` dispatch claim |
+| `job_removed` | `{"id": "<jid>"}` | the job was deleted from the queue |
+| `host` | `{"hosts": [...]}` — the same hosts array as `GET /api/state` | host health changed: worker liveness, queue depths, or pause state (pause/resume publishes immediately) |
+| `engine` | `{"engine": true\|false}` | the engine loop started or stopped |
+| `refresh` | `{"reason": "overflow"}` | this consumer fell behind and its buffer was dropped — re-fetch `GET /api/state` |
+
+Example session:
+
+```
+$ curl -N http://127.0.0.1:8765/api/events
+retry: 2000
+
+event: hello
+data: {"jobs": [...], "hosts": [...], "engine": true, "now": 1757080000}
+
+event: job
+data: {"job": {"id": "a1b2c3d4e5", "status": "running", "pct": 12, ...}}
+
+event: host
+data: {"hosts": [{"alias": "ltx-a", "worker_alive": true, ...}]}
+```
+
+## Versioning
+
+- **1.0** — the original REST endpoints (state, add/regen, per-job, staging,
+  hosts) as first documented.
+- **1.1** — adds `GET /api/events` (SSE). No existing endpoint changed.
+
+Changes are additive: new endpoints, new optional request fields, new
+response fields. Breaking changes would bump the major version and be
+announced here; existing clients (the web dashboard, the native app) are
+updated in the same commit that changes the API.
