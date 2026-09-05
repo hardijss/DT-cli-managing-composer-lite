@@ -397,7 +397,7 @@ def launch(c, con, h, job):
                 note="upload failed: " + r.stderr.strip()[:200]); return
     md = dollar_home(h["models_dir"]) if h["models_dir"] else ""
     mdchk = (f'test -d {shlex.quote(md)} || {{ echo NODMDIR; exit 3; }}; ') if md else ""
-    r = ssh(h["alias"], f"{mdchk}cd {rd} && nohup sh runner.sh > launch.log 2>&1 & echo $!")
+    r = ssh(h["alias"], f"{mdchk}cd {shlex.quote(rd)} && nohup sh runner.sh > launch.log 2>&1 & echo $!")
     if "NODMDIR" in r.stdout:
         set_job(con, job["id"], note=f"models dir missing on host (volume unmounted?) "
                                      f"— retrying: {h['models_dir']}"); return
@@ -452,7 +452,7 @@ def launch_serve(c, con, h, job):
 
 def poll_job(c, con, job):
     h = con.execute("SELECT * FROM hosts WHERE alias=?", (job["host"],)).fetchone()
-    r = ssh(h["alias"], POLL_CMD.format(rd=job["remote_dir"]))
+    r = ssh(h["alias"], POLL_CMD.format(rd=shlex.quote(job["remote_dir"])))
     if r.returncode != 0:
         set_job(con, job["id"], note="poll ssh error: " + r.stderr.strip()[:200]); return
     parts, cur = {}, None
@@ -484,7 +484,7 @@ def poll_job(c, con, job):
             wrote = WROTE.findall(log)
             if not wrote:
                 wrote = WROTE.findall(ssh(h["alias"],
-                    f"tail -c 200000 {job['remote_dir']}/log.txt").stdout)
+                    f"tail -c 200000 {shlex.quote(job['remote_dir'] + '/log.txt')}").stdout)
             if wrote:
                 upd.update(status="collecting", remote_wrote=json.dumps(wrote), note="")
             else:
@@ -548,7 +548,7 @@ def poll_serve_job(c, con, job):
             wrote = WROTE.findall(chunk)
             if not wrote:
                 wrote = WROTE.findall(ssh(h["alias"],
-                    f"tail -c 200000 {wdir(h)}/worker.log").stdout)
+                    f"tail -c 200000 {shlex.quote(wdir(h) + '/worker.log')}").stdout)
             if wrote:
                 upd.update(status="collecting", remote_wrote=json.dumps(wrote), note="")
             else:
@@ -691,6 +691,8 @@ def cmd_add(a):
         con.close()
 
 def _cmd_add(c, con, a):
+    if ".." in a.model or a.model.startswith("/"):
+        sys.exit("invalid --model: must be a model id, not a path with '..' or '/'")
     jid = uuid.uuid4().hex[:10]
     prompt = Path(a.prompt_file).read_text()
     if a.config_file:
@@ -831,10 +833,10 @@ def _cmd_cancel(con, a):
                      "result will be discarded")
         print("marked cancelling (serve backend)"); return
     set_job(con, a.id, status="cancelling")
-    rd = job["remote_dir"]
-    ssh(job["host"], f'pkill -TERM -P "$(cat {rd}/cli_pid 2>/dev/null)" 2>/dev/null; '
-                     f'kill "$(cat {rd}/cli_pid 2>/dev/null)" 2>/dev/null; '
-                     f'kill "$(cat {rd}/pid 2>/dev/null)" 2>/dev/null; true')
+    qrd = shlex.quote(job["remote_dir"])
+    ssh(job["host"], f'pkill -TERM -P "$(cat {qrd}/cli_pid 2>/dev/null)" 2>/dev/null; '
+                     f'kill "$(cat {qrd}/cli_pid 2>/dev/null)" 2>/dev/null; '
+                     f'kill "$(cat {qrd}/pid 2>/dev/null)" 2>/dev/null; true')
     print("cancel requested — poll will mark it cancelled")
 
 def engine_lock():

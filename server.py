@@ -2,8 +2,9 @@
 
 Run: ./venv/bin/python ltxq.py ui [--port 8765] [--no-engine]
 """
-import argparse, contextlib, gc, io, json, shlex, threading, time
+import argparse, contextlib, gc, io, json, re, shlex, threading, time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import flask
 
@@ -11,6 +12,10 @@ import ltxq
 
 HERE = ltxq.HERE
 STATIC = HERE / "static"
+
+# job ids are uuid4().hex[:10]; anything else (esp. "..", "/") is not a job
+JID_RE = re.compile(r"[0-9a-f]{10}")
+MAX_UPLOAD = 4 * 1024**3          # cap multipart bodies (inputs are media files)
 
 STATE = {
     "engine": False,            # engine thread running
@@ -199,6 +204,32 @@ def host_states(con):
 # ------------------------------------------------------------------ flask app
 
 app = flask.Flask(__name__, static_folder=None)
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD
+
+
+@app.before_request
+def _csrf_guard():
+    """Reject cross-origin POSTs (browsers always send Origin on cross-site
+    requests). Non-browser clients (curl) send no Origin and are unaffected;
+    the dashboard binds to 127.0.0.1, so the browser is the only remote-ish
+    client to worry about."""
+    if flask.request.method != "POST":
+        return None
+    origin = flask.request.headers.get("Origin", "")
+    if origin and urlparse(origin).netloc.lower() != \
+            (flask.request.host or "").lower():
+        return flask.jsonify(error="cross-origin request rejected"), 403
+    return None
+
+
+def jid_ok(jid):
+    return bool(JID_RE.fullmatch(jid or ""))
+
+
+def safe_upload_name(fn):
+    """Basename of a client-supplied filename — multipart filenames may carry
+    '/' or '..' (curl sends them verbatim); never let them escape _tmp."""
+    return Path(fn or "upload.bin").name or "upload.bin"
 
 
 def jrow(j):
@@ -264,6 +295,8 @@ def api_add():
     model = f.get("model") or ""
     if not model:
         return flask.jsonify(error="model is required"), 400
+    if ".." in model or model.startswith("/"):
+        return flask.jsonify(error="invalid model name"), 400
     chain = f.get("chain") or None
     if chain not in (None, "first_frame", "image"):
         return flask.jsonify(error="chain must be 'first_frame' or 'image'"), 400
@@ -298,11 +331,11 @@ def api_add():
     for attr, _ in ltxq.FLAGMAP:
         up = files.get(attr)
         if up:
-            p = tmp / f"{int(time.time()*1000)}_{up.filename}"
+            p = tmp / f"{int(time.time()*1000)}_{safe_upload_name(up.filename)}"
             up.save(p)
             setattr(ns, attr, str(p))
     for up in files.getlist("upload"):
-        p = tmp / f"{int(time.time()*1000)}_{up.filename}"
+        p = tmp / f"{int(time.time()*1000)}_{safe_upload_name(up.filename)}"
         up.save(p)
         ns.upload.append(str(p))
     # keyframes: each row = uploaded image + "index[:strength[:attention]]";
@@ -312,7 +345,7 @@ def api_add():
         spec = (f.getlist("keyframe_spec") or [])[i] or "0"
         if not kf.filename:
             continue
-        p = tmp / f"{int(time.time()*1000)}_{kf.filename}"
+        p = tmp / f"{int(time.time()*1000)}_{safe_upload_name(kf.filename)}"
         kf.save(p)
         ns.upload.append(str(p))
         ns.extra_arg.append(f"--keyframe @{p.name}@:{spec.strip()}")
@@ -354,6 +387,8 @@ def _staged_ok(p):
 
 @app.get("/api/view/<jid>")
 def api_view(jid):
+    if not jid_ok(jid):
+        return "no such job", 404
     with contextlib.closing(ltxq.db()) as con:
         j = con.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
         if not j or j["status"] != "done":
@@ -367,8 +402,11 @@ def api_view(jid):
 @app.post("/api/extract")
 def api_extract():
     d = flask.request.get_json(force=True) or {}
+    jid = d.get("jid", "")
+    if not jid_ok(jid):
+        return flask.jsonify(error="job is not done / not found"), 400
     with contextlib.closing(ltxq.db()) as con:
-        j = con.execute("SELECT * FROM jobs WHERE id=?", (d.get("jid", ""),)).fetchone()
+        j = con.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
         if not j or j["status"] != "done":
             return flask.jsonify(error="job is not done / not found"), 400
         v = ltxq.video_of(j)
@@ -396,6 +434,8 @@ def api_stage(name):
 
 @app.get("/api/asset/<jid>/<name>")
 def api_asset(jid, name):
+    if not jid_ok(jid):
+        return "no such asset", 404
     p = HERE / "jobs" / jid / Path(name).name
     if not p.is_file():
         return "no such asset", 404
@@ -405,6 +445,8 @@ def api_asset(jid, name):
 @app.post("/api/stage_from/<jid>/<name>")
 def api_stage_from(jid, name):
     """Copy a past job's input file into the staging area for re-attachment."""
+    if not jid_ok(jid):
+        return flask.jsonify(error="no such asset"), 404
     src = HERE / "jobs" / jid / Path(name).name
     if not src.is_file():
         return flask.jsonify(error="no such asset"), 404
@@ -418,6 +460,8 @@ def api_stage_from(jid, name):
 @app.post("/api/delete/<jid>")
 def api_delete(jid):
     import shutil as _sh
+    if not jid_ok(jid):
+        return flask.jsonify(error="no such job"), 404
     d = (flask.request.get_json(force=True, silent=True) or {})
     with contextlib.closing(ltxq.db()) as con:
         j = con.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
@@ -435,6 +479,8 @@ def api_delete(jid):
 
 @app.post("/api/cancel/<jid>")
 def api_cancel(jid):
+    if not jid_ok(jid):
+        return flask.jsonify(ok=False, error="no such job"), 404
     out, err = _capture(ltxq.cmd_cancel, argparse.Namespace(id=jid))
     return flask.jsonify(ok=not err, error=err, out=out), (400 if err else 200)
 
@@ -467,6 +513,8 @@ def api_queue_resume(alias):
 
 @app.post("/api/regen/<jid>")
 def api_regen(jid):
+    if not jid_ok(jid):
+        return flask.jsonify(error="no such job"), 404
     f = flask.request.form or {}
     ns = argparse.Namespace(
         id=jid, model=f.get("model") or None,
@@ -495,6 +543,8 @@ def api_models(alias):
 
 @app.get("/api/job/<jid>")
 def api_job(jid):
+    if not jid_ok(jid):
+        return flask.jsonify(error="no such job"), 404
     with contextlib.closing(ltxq.db()) as con:
         j = con.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
         if not j:
