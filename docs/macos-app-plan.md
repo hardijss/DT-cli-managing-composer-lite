@@ -1,6 +1,6 @@
 # Target goals: native macOS app (plan of record)
 
-> **Status: planning only — no implementation started.**
+> **Status: Phase 0 complete** (see `macos/README.md`); Phases 1+ not started.
 > This document is the starter plan for the ltxq native macOS app. It is
 > written to be self-contained: paste or attach it into a fresh chat and work
 > can begin from any phase without other context. Each phase ends at a
@@ -57,26 +57,26 @@ to `server.py`.
 
 ### Deliverables
 
-- [ ] `macos/` Xcode project, single SwiftUI app target.
-- [ ] Engine lifecycle manager: spawn `venv/bin/python ltxq.py ui` as a child
+- [x] `macos/` Xcode project, single SwiftUI app target.
+- [x] Engine lifecycle manager: spawn `venv/bin/python ltxq.py ui` as a child
       process, wait until `127.0.0.1:<port>` responds, terminate it on app
       quit.
-- [ ] Graceful handling of `engine.lock` already held (another `ui`/`run`
+- [x] Graceful handling of `engine.lock` already held (another `ui`/`run`
       running): attach to the running instance instead of failing, or a
       clear "already running" state.
-- [ ] Main window = `WKWebView` loading `http://127.0.0.1:<port>/`.
-- [ ] Settings (persisted): path to repo, venv, port. Defaults sensible for
+- [x] Main window = `WKWebView` loading `http://127.0.0.1:<port>/`.
+- [x] Settings (persisted): path to repo, venv, port. Defaults sensible for
       this machine.
-- [ ] App icon, standard window behavior (restore, quit = engine stops —
+- [x] App icon, standard window behavior (restore, quit = engine stops —
       with a user-visible toggle for "keep engine running on quit").
 
 ### Done when
 
-- Launching the app from Finder brings up the dashboard with the engine
-  running; quitting the app (with the toggle on) leaves no orphaned
-  `ltxq.py`/Flask process.
-- With `ltxq.py run` already running in a terminal, the app starts and
-  attaches to it without double-dispatch errors.
+- [x] Launching the app from Finder brings up the dashboard with the engine
+      running; quitting the app (with the toggle on) leaves no orphaned
+      `ltxq.py`/Flask process.
+- [x] With `ltxq.py run` already running in a terminal, the app starts and
+      attaches to it without double-dispatch errors.
 
 ### Risks / do first
 

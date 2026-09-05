@@ -4,6 +4,9 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
 
 ## [Unreleased] - 2026-09-05
 
+### Added
+- **Phase 0 native macOS app (`macos/`)**: Dock-launchable `ltxq.app` (SwiftUI + WKWebView hosting the existing dashboard; zero changes to `server.py`). An engine lifecycle manager probes `127.0.0.1:<port>` for a running ltxq server (fingerprinted via the `/api/state` shape) and attaches to it, or spawns `venv/bin/python ltxq.py ui` as a child — passing `--no-engine` when the `engine.lock` flock is held by another `run`/`ui`, and scanning a small port range past the configured one when it is occupied by a foreign service. Quitting terminates only the child the app itself spawned (user-visible Settings toggle keeps it running), verified for all three paths: attach, `--no-engine` attach, and owned spawn (no orphaned processes). Settings (repo path, port, keep-on-quit) persist in UserDefaults; hand-written Xcode 26 project uses synchronized folder groups; `macos/build.sh` builds without needing a shared scheme. No engine behavior changes.
+
 ### Docs
 - **Native macOS app plan of record (`docs/macos-app-plan.md`, `docs/README.md`)**: Adds a self-contained, phased "target goals" document for building a standalone Mac app on top of ltxq (engine stays Python and is launched by the app as a child process; Xcode project lives in `macos/`; web dashboard stays as fallback). Each phase (WebView shell → SSE/API contract → native UI at parity → Mac-native polish) has deliverables, done-when criteria, and is written to be usable as a starter plan in a fresh session. Planning only — no code changes.
 
