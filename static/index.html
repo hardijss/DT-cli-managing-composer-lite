@@ -537,7 +537,13 @@ function setDzFile(dz, f) {
 }
 function wireDropzone(dz) {
   const inp = dz.querySelector("input[type=file]");
-  dz.addEventListener("click", () => { pasteTarget = dz; });
+  dz.addEventListener("click", e => {
+    pasteTarget = dz;
+    // explicit open: some WebKit builds (WKWebView) don't forward label clicks
+    // to the hidden 1px input; preventDefault avoids the native forwarding
+    // double-opening the chooser in regular browsers
+    if (e.target === dz) { e.preventDefault(); inp.click(); }
+  });
   dz.addEventListener("mouseenter", () => { pasteTarget = dz; });
   dz.addEventListener("keydown", e => {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); inp.click(); }

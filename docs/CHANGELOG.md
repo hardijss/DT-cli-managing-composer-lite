@@ -4,6 +4,9 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
 
 ## [Unreleased] - 2026-09-05
 
+### Fixed
+- **File dialog never opens in the macOS app (`macos/Ltxq/DashboardView.swift`, `static/index.html`)**: Clicking a "drop, paste, or click to browse" tile in the native app did nothing — WKWebView only opens a file chooser when its UI delegate implements `runOpenPanelWith` (browsers have this built in), and the shell had no UIDelegate. Added a `WKUIDelegate` coordinator presenting an `NSOpenPanel` (multiple-selection and Cancel passed back to the page), and made the dashboard's tile click handler explicitly `inp.click()` (with `preventDefault` so native label-forwarding doesn't double-open in regular browsers), removing the dependence on label activation of a 1px `opacity:0` hidden input. Verified `build.sh` compiles clean.
+
 ### Changed
 - **Example config presets local generation (`hosts.yaml.example`, `README.md`)**: The template now ships with the `local` host `enabled: true` (comment: set to `false` if this machine should not generate) and the example ssh host `ltx-a` `enabled: false` (comment: fill in `dest`/`models_dir` and flip to `true` to use it) — so a fresh `cp hosts.yaml.example hosts.yaml` generates locally out of the box instead of pointing dispatch at a placeholder remote. The README minimal example was updated to match; no code changes.
 
