@@ -4,6 +4,18 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
 
 ## [Unreleased] - 2026-09-06
 
+### Fix: "Copy from New job" now carries the start image; no-cache for the dashboard
+
+- **`static/index.html`**: the batch form's "Copy from New job" button also transfers the New-job form's `--image` selection into the batch start-image dropzone (same-document `FileList` assignment; guarded with a fallback note if a browser refuses), and the flash message now says so explicitly plus that audio is deliberately not copied (batch audio comes from the wavs). Verified live in the in-app browser: fields and image label populate on click.
+- **`server.py`**: `/` serves `index.html` with `Cache-Control: no-cache` — the dashboard is a single file that changes with the app, and a stale webview shouldn't outlive an upgrade (the reported "button flashes but fields don't fill" reproduced only against a stale page; fresh pages copy correctly).
+
+### Feature: batch start/per-segment images + "Copy from New job" button
+
+- **`ltxq.py`**: `add-batch` picks up same-named `<wav-stem>.png/jpg/jpeg/webp` files next to the wavs as that segment's `--image`; new `--image <file>` attaches a start image to segment 1 only (the chain anchor), overriding its sidecar. A segment carrying a manual `--image` skips the visual chain for that segment (`resolve_chain` gives manual attachments precedence) — the queue report tags those jobs. Verified via the test client: sidecar pickup on segment 2, explicit-image override on segment 1, and chain skip vs. resolution (`chain_<pred>_f24.png` attached on the image-less segment).
+- **`server.py`**: `/api/add-batch` accepts an `image` file part → start image for segment 1.
+- **`static/index.html`**: audio-batch form gains a start-image dropzone (`--image` on segment 1) and a "Copy from New job" button that fills the batch form's model, host, ext, seed, config overlay, and shared prompt from the single-job composer.
+- **`docs/features.md`**, **`docs/api.md`**, **`docs/expansion-of-this-idea.md`**: input contract and endpoint documentation updated.
+
 ### Feature: visual continuity for audio batches (`add-batch --chain`) + batch-scoped chain dispatch gate
 
 - **`ltxq.py`**: `add-batch` gained `--chain` — segments 2..N are created with `chain=image` so `resolve_chain` attaches the previous segment's last frame as `--image` at launch time (segment 1 stays unchained; the `--image` slot is the correct continuation target — a lone `--first-frame` is invalid, it only pairs with `--last-frame`). To make the batch-scope chain deterministic under parallel hosts, `dispatch()` now defers any queued job that has both `chain` and `batch` while another job of the same batch is active (uploading/running/collecting/suspect/cancelling): the batch self-serializes and the "most recent finished job in batch" chain source is always the true predecessor. Unbatched chain jobs and unchained batch jobs are unaffected; unrelated jobs still dispatch freely around a deferred batch. Tested end-to-end on a scratch db with a fake local host and a real 1-second test video as the finished predecessor: deferral while active, frame extraction (`chain_<pred>_f24.png` → `--image` in runner.sh) after completion, and continued deferral of the next segment.

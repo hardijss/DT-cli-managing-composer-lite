@@ -78,8 +78,10 @@
   path) and queue one job per `.wav` with the same frame/prompt/grid rules as
   `add-batch` — model/host/ext/seed/config-overlay/batch-label fields, shared
   fallback prompt, non-8n+1 policy selector, visual-continuity checkbox
-  (previous segment's last frame as `--image`); validation failures list
-  every offending segment and queue nothing
+  (previous segment's last frame as `--image`), a start-image dropzone for
+  segment 1, and a "Copy from New job" button (model, host, ext, seed,
+  config overlay, prompt); validation failures list every offending segment
+  and queue nothing
 
 ### CLI
 - `add/add-batch/ls/run/cancel/regen/check/probe/models/stage/reconcile/
@@ -96,7 +98,11 @@
   get the previous segment's last frame attached as `--image` (a lone
   first-frame is invalid; it only pairs with `--last-frame`). Batch-chained
   jobs defer dispatch until the rest of the batch is done, so the batch
-  self-serializes across any number of hosts
+  self-serializes across any number of hosts; `--image` attaches a start
+  image to segment 1 (the chain anchor), and same-named
+  `<stem>.png/jpg/jpeg/webp` files next to the wavs are picked up as
+  per-segment `--image` (a manual `--image` wins over the chain for that
+  segment)
 - `doctor`: db self-checks (set_job single-row), ssh reachability, remote
   shell arithmetic, worker liveness, flask presence
 

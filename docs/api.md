@@ -135,12 +135,13 @@ error list and no jobs created.
 |---|---|
 | `model` | required, model id |
 | `dir` | segment directory **path on the server machine** (used when no files are uploaded) |
-| `files` | repeatable file part — the folder's contents uploaded from the browser (wavs, manifest, sidecars); staged flat into `jobs/_tmp` for the request, then removed |
+| `files` | repeatable file part — the folder's contents uploaded from the browser (wavs, manifest, sidecars); staged flat into `jobs/_tmp` for the request, then removed. A same-named `<wav-stem>.png/jpg/jpeg/webp` file among them is attached as that segment's `--image` |
+| `image` | optional single file part — start image attached as `--image` to segment 1 (overrides its same-named sidecar image) |
 | `prompt` | shared fallback prompt for segments without a sidecar |
 | `config_json` | JSON overlay on the base config (per-model template, else last completed job's config — same fallback as `/api/add`) |
 | `batch` | label; default = manifest `Original File` stem, else directory name |
-| `host` / `seed` / `ext` / `backend` | as on `/api/add` (no `name`, `frames`, media slots — per-segment values are derived) |
-| `chain` | any non-empty value enables visual continuity: segments 2..N get the previous segment's last frame attached as `--image` at launch time (a lone first-frame is invalid — it only pairs with `--last-frame`); batch-chained jobs defer dispatch until the rest of the batch is done (serial batch) |
+| `host` / `seed` / `ext` / `backend` | as on `/api/add` (no `name`, `frames`, media slots other than `image` — per-segment values are derived) |
+| `chain` | any non-empty value enables visual continuity: segments 2..N get the previous segment's last frame attached as `--image` at launch time (a lone first-frame is invalid — it only pairs with `--last-frame`); batch-chained jobs defer dispatch until the rest of the batch is done (serial batch). A segment with its own `--image` skips the chain for that segment |
 | `on_non_grid` | `round-up` (default: pad wav with silence), `round-down` (trim), `refuse` |
 
 Response: `{"jids": ["<id>", …], "report": "<planner/queue output>"}`.

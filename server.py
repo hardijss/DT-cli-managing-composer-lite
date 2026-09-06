@@ -389,7 +389,11 @@ def state_dict():
 
 @app.get("/")
 def index():
-    return flask.send_from_directory(STATIC, "index.html")
+    # no-cache: the dashboard is a single file that changes with the app —
+    # a stale webview must never outlive an upgrade
+    r = flask.send_from_directory(STATIC, "index.html")
+    r.headers["Cache-Control"] = "no-cache"
+    return r
 
 
 @app.get("/api/state")
@@ -687,6 +691,11 @@ def api_add_batch():
         if prompt:
             prompt_file = STAGE / f"prompt_{int(time.time()*1000)}.txt"
             prompt_file.write_text(prompt)
+        image_path = None
+        up = flask.request.files.get("image")
+        if up and up.filename:
+            image_path = STAGE / f"{int(time.time()*1000)}_{safe_upload_name(up.filename)}"
+            up.save(image_path)
         ns = argparse.Namespace(
             dir=segdir, model=model, prompt_file=prompt_file,
             config_file=None, config_json=f.get("config_json") or None,
@@ -695,6 +704,7 @@ def api_add_batch():
             ext=f.get("ext") or "mov", backend=f.get("backend") or None,
             batch=(f.get("batch") or "").strip() or None, manifest=None,
             chain="image" if f.get("chain") else None,
+            image=image_path,
             on_non_grid=on_grid)
         # base config: per-model template if present, else the last completed
         # job's config — same fallback as /api/add

@@ -1067,7 +1067,7 @@ def _cmd_add_batch(c, con, a):
             errors.append("manifest file lines don't match the wavs in the dir")
         if man["raw"] and man["raw"] != list(man["per"].values()):
             errors.append("Raw Frame Counts block != per-file frame counts")
-    for p in wavs:
+    for i, p in enumerate(wavs):
         if man:
             src_frames = man["per"].get(p.name)
             if src_frames is None:
@@ -1107,8 +1107,19 @@ def _cmd_add_batch(c, con, a):
         if not prompt.strip():
             errors.append(f"{p.name}: empty prompt ({sidecar.name if sidecar.exists() else '--prompt-file'})")
             continue
+        img = None
+        if i == 0 and a.image:
+            # explicit start image (CLI/UI) wins over a same-named sidecar
+            img = Path(a.image).expanduser()
+            if not img.exists():
+                errors.append(f"--image not found: {img}"); continue
+        else:
+            for ext in (".png", ".jpg", ".jpeg", ".webp"):
+                cand = segdir / (p.stem + ext)
+                if cand.exists():
+                    img = cand; break
         items.append({"wav": p, "frames": frames, "prompt": prompt, "name": p.stem,
-                      "note": note, "fit": fit})
+                      "note": note, "fit": fit, "image": img})
     if errors:
         for e in errors:
             print("ERROR:", e, file=sys.stderr)
@@ -1137,13 +1148,19 @@ def _cmd_add_batch(c, con, a):
                     print(f"ERROR: {it['name']}: {e} — segment skipped", file=sys.stderr)
                     continue
             job_cfg = dict(obj); job_cfg["numFrames"] = it["frames"]
+            assets = [("--audio", str(src))]
+            if it["image"]:
+                assets.append(("--image", str(it["image"])))
             jid = create_job(c, con, a.model, it["prompt"],
                              json.dumps(job_cfg, indent=2),
-                             [("--audio", str(src))], list(seed_extra),
+                             assets, list(seed_extra),
                              host=a.host, name=it["name"], ext=a.ext,
                              backend=a.backend, batch=batch, chain=chain if i else None,
                              num_frames=it["frames"], fps=tfps)
-            print(f"{jid}  {it['name']}  {it['frames']} frames"
+            tag = "  [--image]" if it["image"] else ""
+            if it["image"] and chain and i:
+                tag += "  [chain skipped — manual --image wins]"
+            print(f"{jid}  {it['name']}  {it['frames']} frames{tag}"
                   + (f"  [{it['note']}]" if it["note"] else ""))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -1597,6 +1614,11 @@ def main():
                         "(first-frame alone is invalid — it only pairs with "
                         "--last-frame); batch-chained jobs defer dispatch until "
                         "the rest of the batch is done, so the batch runs serially")
+    g.add_argument("--image",
+                   help="start image attached as --image to the first segment "
+                        "(the chain anchor); overrides a same-named sidecar image. "
+                        "Same-named <stem>.png/jpg/jpeg/webp files next to the wavs "
+                        "are always picked up as per-segment --image")
     g = sp.add_parser("regen"); g.add_argument("id")
     g.add_argument("--model"); g.add_argument("--config-json"); g.add_argument("--host")
     g.add_argument("--name"); g.add_argument("--seed", type=int)

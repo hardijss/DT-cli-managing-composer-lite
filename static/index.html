@@ -233,8 +233,16 @@ a { color:var(--acc); text-decoration:none; }
         continuity — segments 2..N get the previous segment's last frame as
         <span class="mono">--image</span> (the batch then dispatches serially,
         on any number of hosts)</label>
+      <div class="row" style="margin-top:4px">
+        <div class="grow" style="min-width:240px"><label>Start image — <span class="mono">--image</span> on segment 1
+          (overrides a same-named sidecar image; segments with a sidecar image skip the chain)</label>
+          <div class="filerow"><label class="filedrop" tabindex="0" data-dz="bimage">
+            <input type="file" id="bimage" accept="image/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label>
+            <button type="button" class="sec" data-clear="bimage" title="clear selected image" hidden>✕</button></div></div>
+      </div>
       <div class="row" style="margin-top:14px">
         <button type="submit">Queue batch</button>
+        <button type="button" class="sec" id="bcopy" title="copy model, host, ext, seed, config and prompt from the New-job form">Copy from New job</button>
         <span class="sub" id="batchmsg"></span>
       </div>
     </form>
@@ -933,6 +941,34 @@ bdz.addEventListener("drop", async e => {
 document.querySelector('[data-clear="batchseg"]').onclick = () => {
   batchFiles = []; binp.value = ""; batchSync();
 };
+// start-image dropzone for segment 1 (manual wiring — not part of the SLOTS loop)
+const bimgDz = document.querySelector('[data-dz="bimage"]');
+const bimgClr = document.querySelector('[data-clear="bimage"]');
+wireDropzone(bimgDz);
+bimgClr.hidden = !$("bimage").files.length;
+$("bimage").addEventListener("change", () => { bimgClr.hidden = !$("bimage").files.length; });
+bimgClr.onclick = () => {
+  $("bimage").value = ""; $("bimage").files = new DataTransfer().files;
+  dzSync(bimgDz); bimgClr.hidden = true;
+};
+$("bcopy").onclick = () => {
+  $("bmodel").value = $("model").value;
+  $("bhost").value = $("host").value;
+  $("bext").value = $("ext").value;
+  if ($("seed").value) $("bseed").value = $("seed").value;
+  $("bcfg").value = $("config_json").value;
+  $("bprompt").value = $("prompt").value;
+  let imgNote = "";
+  try {
+    if ($("image").files.length) {
+      $("bimage").files = $("image").files;        // same-document FileList transfer
+      dzSync(bimgDz); bimgClr.hidden = false;
+      imgNote = ", start image";
+    }
+  } catch (e) { imgNote = " (image could not be copied — pick it below)"; }
+  flash("copied model, host, ext, seed, config and prompt" + imgNote +
+        " from the New-job form (audio is batch-specific — picked per segment)");
+};
 $("batchform").onsubmit = async ev => {
   ev.preventDefault();
   const fd = new FormData();
@@ -945,6 +981,7 @@ $("batchform").onsubmit = async ev => {
   if ($("bcfg").value.trim())  fd.set("config_json", $("bcfg").value);
   if ($("bprompt").value.trim()) fd.set("prompt", $("bprompt").value);
   if ($("bchain").checked) fd.set("chain", "first_frame");
+  if ($("bimage").files[0]) fd.set("image", $("bimage").files[0]);
   if (batchFiles.length) {
     for (const f of batchFiles) fd.append("files", f, f.name);
   } else if ($("bdir").value.trim()) {

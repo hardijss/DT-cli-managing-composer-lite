@@ -59,6 +59,11 @@ Banderos Cats-2_0008.wav: 181 frames (7.240s, Non-8n+1)
   `.txt` extension (`Name_0001.txt` …). The sidecar **is** that segment's
   prompt — spoken text changes per segment, so this is the primary prompt
   source, not an override footnote.
+- optionally per-segment image sidecars: same basename with an image
+  extension (`Name_0001.png` …) — attached as that segment's `--image`. A
+  manual `--image` (explicit start image for segment 1) wins over a sidecar;
+  a segment with any `--image` skips the visual chain for that segment
+  (manual attachments take precedence in `resolve_chain`).
 
 ### Frames: where each job's numFrames comes from
 
