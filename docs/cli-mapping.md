@@ -112,8 +112,10 @@ diff. Grouped as the engine's help groups them:
 | `--version`, `-h/--help` | n/a | n/a |
 
 Most-wanted promotions at the time of writing (cheap, content-knob shaped):
-`--negative-prompt`, `--fflf-preflight` (as a "validate keyframes" button), and
-an `extra_arg` passthrough box in the form (the API already accepts it; the HTML
-form does not). `--video-format` was promoted 2026-09-06 — but to a hosts.yaml
-preset rather than a form field, since a codec is a per-host/experiment choice,
-not a per-job knob.
+`--negative-prompt` and an `extra_arg` passthrough box in the form (the API
+already accepts it; the HTML form does not). Two promotions since landed:
+`--video-format` as a hosts.yaml preset (a codec is a per-host choice, not a
+per-job knob) and `--fflf-preflight` as an automatic dispatch-time check for
+oneshot jobs carrying both first and last frames — chain-resolved frames
+included, which a form-time button could never cover (the frame doesn't exist
+until the job's turn in the queue).

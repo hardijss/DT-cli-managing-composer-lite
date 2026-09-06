@@ -4,6 +4,14 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
 
 ## [Unreleased] - 2026-09-06
 
+### Docs: TODO — live sampling preview in the dashboard
+
+- **`docs/features.md`**: new TODO noting that `--disable-preview` is deliberately included with every `generate` invocation (hosts.yaml `disable_preview: true`, the `conf()` default, applied in both `gen_args` and `serve_args`) until ltxq implements a live preview surface — capturing the engine's preview stream and pushing it over SSE — after which the flag default could flip. Docs-only change; no code touched (the flag was already always on).
+
+### Feature: dispatch-time `--fflf-preflight` for first+last-frame jobs
+
+- **`ltxq.py`**: oneshot `launch()` now runs one extra `generate --fflf-preflight` on the host when the job carries both `--first-frame` and `--last-frame` assets — after `resolve_chain`, so chain-attached frames (which don't exist until the job's turn in the queue) are validated too. The shared argument string was factored out of `make_runner` into `gen_args()` so the probe and the real render stay in sync. A failing check (engine exits nonzero) fails the job with the engine's message instead of burning a render; full output lands in the job dir's `preflight.txt`, a summary goes to the job note. Transport errors skip the check and render anyway (5-min timeout guards the engine loop). First-frame-only, middle-only, and serve-backend jobs are not preflighted (the engine flag validates the FFLF pair). The host CLI/models-dir existence checks were split into their own ssh call ahead of the preflight so their friendly error notes win over a raw preflight failure.
+
 ### Feature: `--video-format` as a hosts.yaml preset (default hevc, per-host override)
 
 - **`ltxq.py`**: new global `video_format` key (default `hevc`) with per-host override, resolved by `video_format_of()` and appended as `--video-format <v>` in both backends — `make_runner` (oneshot, at dispatch time where the host row is known, like `models_dir`) and `serve_args` (serve). Only emitted for video outputs (`mov`/`mp4`); an explicit empty string on a host omits the flag entirely; `hosts` table gained a `video_format` column (migration) synced from yaml via `COALESCE` (absent key keeps the stored value). ProRes + `.mp4` conflict is left to the engine's own error, documented in environment.md.

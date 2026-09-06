@@ -79,6 +79,7 @@ FLAGMAP = (("image", "--image"), ("audio", "--audio"), ("first_frame", "--first-
 PATH_FLAGS = ("--config-file", "--prompt-file", "--output", "--image", "--audio",
               "--first-frame", "--middle-frame", "--last-frame", "--input-video",
               "--models-dir")
+FFLF_FLAGS = ("--first-frame", "--middle-frame", "--last-frame")
 
 PROBE_SH = '''
 echo "HOME=$HOME"; echo "UNAME=$(uname -s)"
@@ -338,8 +339,9 @@ def resolve_extra(extra, rd=None):
         out.append(KFREF.sub(lambda m: (f"{rd}/{m.group(1)}" if rd else m.group(1)), t))
     return out
 
-def make_runner(model, cli_path, use_pty, assets, extra, c, ext, models_dir=None,
-                video_format=None):
+def gen_args(model, assets, extra, c, ext, models_dir=None, video_format=None):
+    """The generate argument string shared by runner.sh and the dispatch-time
+    --fflf-preflight probe. Paths are job-dir-relative (runner.sh cds in)."""
     args = (f"--model {shlex.quote(dollar_home(model))} "
             f"--config-file config.json --output out.{ext} --prompt-file prompt.txt")
     if models_dir:
@@ -353,6 +355,11 @@ def make_runner(model, cli_path, use_pty, assets, extra, c, ext, models_dir=None
         if a_.get("flag"):
             args += f" {a_['flag']} {shlex.quote(a_['file'])}"
     args += " " + " ".join(shlex.quote(t) for t in resolve_extra(extra))
+    return args
+
+def make_runner(model, cli_path, use_pty, assets, extra, c, ext, models_dir=None,
+                video_format=None):
+    args = gen_args(model, assets, extra, c, ext, models_dir, video_format)
     return RUNNER.format(pty=1 if use_pty else 0, cli=dollar_home(cli_path), args=args)
 
 def upload(alias, rd, local_dir, names):
@@ -457,14 +464,17 @@ def launch(c, con, h, job):
     if backend == "serve":
         return launch_serve(c, con, h, job)
     rd = f"{h['home']}/{c['remote_root']}/jobs/{job['id']}"
+    ext = job["ext"] or "mov"
+    assets = json.loads(job["assets"] or "[]")
+    extra = json.loads(job["extra_args"] or "[]")
+    vf = video_format_of(c, h)
     (Path(job["local_dir"]) / "runner.sh").write_text(make_runner(
-        job["model"], cli_of(c, h), c["use_pty"], json.loads(job["assets"] or "[]"),
-        json.loads(job["extra_args"] or "[]"), c, job["ext"] or "mov",
-        models_dir=h["models_dir"], video_format=video_format_of(c, h)))
+        job["model"], cli_of(c, h), c["use_pty"], assets, extra, c, ext,
+        models_dir=h["models_dir"], video_format=vf))
     names = ["runner.sh", "prompt.txt"]
     names.append("config.json" if (Path(job["local_dir"]) / "config.json").exists()
                  else "config.txt")
-    names += [x["file"] for x in json.loads(job["assets"] or "[]")]
+    names += [x["file"] for x in assets]
     r, ok = upload(h["alias"], rd, Path(job["local_dir"]), names)
     if not ok:
         set_job(con, job["id"], status="queued",
@@ -475,7 +485,7 @@ def launch(c, con, h, job):
     # Double quotes so $HOME expands remotely while spaces in the path survive.
     cchk = (f'test -x "{dollar_home(cli_of(c, h))}" '
             f'|| {{ echo NOCLI; exit 3; }}; ')
-    r = ssh(h["alias"], f"{cchk}{mdchk}cd {shlex.quote(rd)} && nohup sh runner.sh > launch.log 2>&1 & echo $!")
+    r = ssh(h["alias"], f"{cchk}{mdchk}echo CHKOK")
     if "NOCLI" in r.stdout:
         set_job(con, job["id"], status="queued",
                 note=f"tod-cli not found at {cli_of(c, h)} on host '{h['alias']}' "
@@ -483,10 +493,37 @@ def launch(c, con, h, job):
     if "NODMDIR" in r.stdout:
         set_job(con, job["id"], note=f"models dir missing on host (volume unmounted?) "
                                      f"— retrying: {h['models_dir']}"); return
+    if r.returncode != 0:
+        set_job(con, job["id"], note="launch failed: "
+                                     + (r.stderr or r.stdout).strip()[:200]); return
+    # --fflf-preflight at dispatch: once the chain frame is resolved into the
+    # job dir, all first/last inputs exist, so the engine can validate them and
+    # resolve indices before we burn a render on an unattended queue. Runs only
+    # when BOTH frames are present (the engine's preflight validates the pair);
+    # transport errors skip the check, an engine-level failure fails the job.
+    pf_note = ""
+    if {"--first-frame", "--last-frame"} <= {a.get("flag") for a in assets}:
+        pf = (f"cd {shlex.quote(rd)} && {shlex.quote(dollar_home(cli_of(c, h)))} "
+              f"generate {gen_args(job['model'], assets, extra, c, ext, models_dir=h['models_dir'], video_format=vf)} "
+              f"--fflf-preflight")
+        try:
+            pr = ssh(h["alias"], pf, timeout=300)
+        except Exception as e:
+            pf_note = f"fflf preflight skipped (transport: {e})"[:160]
+        else:
+            (Path(job["local_dir"]) / "preflight.txt").write_text(pr.stdout + pr.stderr)
+            if pr.returncode != 0:
+                set_job(con, job["id"], status="failed",
+                        note="fflf preflight failed: "
+                             + (pr.stdout + pr.stderr).strip()[-280:])
+                return
+            out = " ".join((pr.stdout or "").split())
+            pf_note = ("fflf preflight ok — " + out[-140:]) if out else "fflf preflight ok"
+    r = ssh(h["alias"], f"cd {shlex.quote(rd)} && nohup sh runner.sh > launch.log 2>&1 & echo $!")
     ok = r.returncode == 0 and r.stdout.strip().isdigit()
     set_job(con, job["id"], status="running" if ok else "queued", host=h["alias"],
             backend="oneshot", remote_dir=rd,
-            note="" if ok else "launch failed: " + (r.stderr or r.stdout).strip()[:200])
+            note=pf_note if ok else "launch failed: " + (r.stderr or r.stdout).strip()[:200])
 
 def serve_args(job, h, c):
     rd = f"{h['home']}/{c['remote_root']}/jobs/{job['id']}"

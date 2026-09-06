@@ -28,6 +28,14 @@
   the frame (noted), never failing the render. Jobs carrying a `batch` label
   scope the lookup to the previous finished job *in the same batch*;
   unbatched jobs use all finished generations
+- FFLF preflight: oneshot jobs carrying both `--first-frame` and
+  `--last-frame` (chain-resolved included) get one extra `generate
+  --fflf-preflight` invocation at dispatch — the engine validates the frame
+  inputs and resolves indices without rendering (full output in the job dir's
+  `preflight.txt`, summary in the job note). A failing check fails the job
+  with the engine's message instead of burning a render; transport errors
+  skip the check and render anyway. Serve-backend jobs and first-frame-only
+  jobs (the engine preflight validates the pair) are not preflighted
 - Batch groups: jobs may carry an optional `batch` label (CLI `--batch`, form
   "Batch" field) — surfaced as a 📦 badge, kept across regen, and used as the
   chain scope above; dispatch order within a submission burst follows
@@ -94,3 +102,10 @@
   cost/queue-aware scheduling
 - Templates dir is empty — seed per-model default configs to make `add`
   work without `--config-file`
+- Live sampling preview in the dashboard: the engine CLI emits preview frames
+  during sampling; until ltxq renders them somewhere (active-job card), the
+  `--disable-preview` flag is included with every `generate` invocation
+  (hosts.yaml `disable_preview: true`, also the default) to save the
+  bandwidth/pty churn. Implementing preview means capturing the pty/serve
+  preview stream per job and pushing it over the SSE event stream — only then
+  would the flag default flip
