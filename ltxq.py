@@ -67,6 +67,11 @@ GENP  = re.compile(r"Generated\s*\[[^\]]*\]\s*(\d{1,3})\s*%")
 MDIR_HDR = re.compile(r"^Models directory:\s*(.+)$", re.M)
 ROW = re.compile(r"^(\S+\.ckpt)\s{2,}(.+?)\s{2,}(official|community)\s+(yes|no)(?:\s+(\S+))?\s*$", re.M)
 SHUTDOWN = shlex.quote('{"command":"shutdown"}')
+# `generate --help` option gutter: "  --model <model>" / "  -m, --model <model>" /
+# "  --download-missing/--no-download-missing". Prose wrapped to the same gutter
+# can false-positive, which is harmless for a drift check (one extra snapshot line).
+GENOPT = re.compile(r"^\s{2,8}(?:-[a-zA-Z],\s)?(--[A-Za-z0-9-/]+)", re.M)
+SNAP_FLAGS = HERE / "docs" / "generate_flags.txt"
 
 FLAGMAP = (("image", "--image"), ("audio", "--audio"), ("first_frame", "--first-frame"),
            ("middle_frame", "--middle-frame"), ("last_frame", "--last-frame"),
@@ -1127,6 +1132,60 @@ def cmd_doctor(a):
             chk(f"{tool} available", False, str(e))
     print("doctor:", "PASS" if ok else "FAIL")
 
+def _gen_flags(help_text):
+    flags = set()
+    for m in GENOPT.finditer(help_text):
+        flags.update(p for p in m.group(1).split("/") if p.startswith("--"))
+    return flags
+
+def cmd_flags(a):
+    """Drift check: run `generate --help` on each host, extract the option list,
+    and diff it against docs/generate_flags.txt so a new/removed draw-things-cli
+    argument surfaces without a manual audit. See docs/cli-mapping.md."""
+    con, c = db(), conf(); sync_hosts(con)
+    rows = con.execute("SELECT * FROM hosts WHERE enabled=1").fetchall()
+    if a.aliases:
+        byname = {h["alias"]: h for h in rows}
+        missing = [x for x in a.aliases if x not in byname]
+        if missing: sys.exit(f"no such enabled host(s): {', '.join(missing)}")
+        rows = [byname[x] for x in a.aliases]
+    if not rows: sys.exit("no enabled hosts")
+    seen = {}
+    for h in rows:
+        cli = shlex.quote(dollar_home(cli_of(c, h)))
+        r = ssh(h["alias"], f"{cli} generate --help", timeout=60)
+        # the USAGE header distinguishes real help from a stub that ignores
+        # --help and starts generating
+        if r.returncode != 0 or "USAGE" not in r.stdout:
+            print(f"{h['alias']}: no help output ({r.stderr.strip()[:120] or 'empty'})")
+            continue
+        seen[h["alias"]] = _gen_flags(r.stdout)
+        print(f"{h['alias']}: {len(seen[h['alias']])} options")
+    if not seen: sys.exit(1)
+    union = set().union(*seen.values())
+    for alias, fl in seen.items():
+        skew = union - fl
+        if skew: print(f"{alias}: host skew — missing {', '.join(sorted(skew))}")
+    snap = set()
+    if SNAP_FLAGS.exists():
+        snap = {l.strip() for l in SNAP_FLAGS.read_text().splitlines()
+                if l.strip() and not l.startswith("#")}
+    else:
+        print(f"note: no snapshot yet at {SNAP_FLAGS.relative_to(HERE)}")
+    new, gone = sorted(union - snap), sorted(snap - union)
+    for f in new:  print("NEW    ", f)
+    for f in gone: print("GONE   ", f)
+    if a.update:
+        SNAP_FLAGS.write_text(
+            "# draw-things-cli `generate --help` option snapshot for `ltxq flags`.\n"
+            "# One long option per line; combined --x/--no-x forms are stored split.\n"
+            f"# Updated {time.strftime('%Y-%m-%d')} from: {', '.join(sorted(seen))}\n"
+            + "\n".join(sorted(union)) + "\n")
+        print(f"snapshot updated: {SNAP_FLAGS.relative_to(HERE)} ({len(union)} options)")
+    drift = bool(new or gone or any(union - fl for fl in seen.values()))
+    print("flags:", "DRIFT" if drift else "in sync with snapshot")
+    sys.exit(1 if drift else 0)
+
 def cmd_ui(a):
     sys.path.insert(0, str(HERE))
     import server
@@ -1254,6 +1313,11 @@ def main():
     g = sp.add_parser("stage"); g.add_argument("alias"); g.add_argument("model")
     g.add_argument("--allow-download", action="store_true")
     g = sp.add_parser("check"); g.add_argument("id"); g.add_argument("--host")
+    g = sp.add_parser("flags", help="diff each host's engine-CLI generate options "
+                                    "against docs/generate_flags.txt")
+    g.add_argument("aliases", nargs="*")
+    g.add_argument("--update", action="store_true",
+                   help="rewrite the snapshot from what the hosts report")
     g = sp.add_parser("cancel"); g.add_argument("id")
     g = sp.add_parser("serve-start"); g.add_argument("alias")
     g = sp.add_parser("serve-stop"); g.add_argument("alias")
@@ -1262,6 +1326,7 @@ def main():
     {"add": cmd_add, "ls": cmd_ls, "run": cmd_run, "cancel": cmd_cancel,
      "regen": cmd_regen, "probe": cmd_probe, "reconcile": cmd_reconcile,
      "models": cmd_models, "check": cmd_check, "stage": cmd_stage,
+     "flags": cmd_flags,
      "serve-start": cmd_serve_start, "serve-stop": cmd_serve_stop,
      "doctor": cmd_doctor, "ui": cmd_ui}[args.cmd](args)
 

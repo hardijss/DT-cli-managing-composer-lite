@@ -8,6 +8,9 @@ Topic docs:
 - [architecture.md](architecture.md) — folder structure, data flow, external dependencies
 - [backends.md](backends.md) — oneshot vs serve: setup, lifecycle, cancel semantics, performance
 - [api.md](api.md) — HTTP API contract (dashboard / macOS app / external clients)
+- [cli-mapping.md](cli-mapping.md) — how UI/API settings map onto the engine CLI's
+  `generate` flags, the promotion policy for new engine arguments, and the
+  `ltxq flags` drift check (with committed snapshot [generate_flags.txt](generate_flags.txt))
 - [environment.md](environment.md) — hosts.yaml keys, env vars, CLI flags
 - [features.md](features.md) — full feature list, known issues, TODOs
 - [decisions.md](decisions.md) — design decisions and rationale
