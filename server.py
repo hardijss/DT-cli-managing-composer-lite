@@ -2,7 +2,7 @@
 
 Run: ./venv/bin/python ltxq.py ui [--port 8765] [--no-engine]
 """
-import argparse, contextlib, gc, io, json, re, shlex, subprocess, sys, tempfile, threading, time
+import argparse, contextlib, gc, io, json, re, shlex, shutil, subprocess, sys, tempfile, threading, time
 from collections import deque
 from pathlib import Path
 from urllib.parse import urlparse
@@ -650,6 +650,75 @@ STAGE = HERE / "jobs" / "_tmp"
 def _staged_ok(p):
     p = Path(p)
     return p.exists() and p.parent == STAGE and p.name.startswith("stage_")
+
+
+@app.post("/api/add-batch")
+def api_add_batch():
+    """Audio-segment batch (ltxq add-batch): the segments come either as
+    uploaded folder files (webkitdirectory picker, staged flat into _tmp) or
+    as a server-side path typed into the form; everything else routes through
+    cmd_add_batch via a Namespace, exactly like /api/add does for cmd_add."""
+    f = flask.request.form
+    model = f.get("model") or ""
+    if not model:
+        return flask.jsonify(error="model is required"), 400
+    if ".." in model or model.startswith("/"):
+        return flask.jsonify(error="invalid model name"), 400
+    on_grid = f.get("on_non_grid") or "round-up"
+    if on_grid not in ("round-up", "round-down", "refuse"):
+        return flask.jsonify(error="invalid on_non_grid"), 400
+    staged_dir = None
+    try:
+        ups = flask.request.files.getlist("files")
+        if ups:
+            staged_dir = STAGE / f"batchseg_{int(time.time()*1000)}"
+            staged_dir.mkdir(parents=True)
+            for up in ups:
+                up.save(staged_dir / safe_upload_name(up.filename))
+            segdir = str(staged_dir)
+        else:
+            segdir = (f.get("dir") or "").strip()
+            if not segdir:
+                return flask.jsonify(error="pick a folder or enter a segment "
+                                           "directory path"), 400
+            segdir = str(Path(segdir).expanduser())
+        prompt = (f.get("prompt") or "").strip()
+        prompt_file = None
+        if prompt:
+            prompt_file = STAGE / f"prompt_{int(time.time()*1000)}.txt"
+            prompt_file.write_text(prompt)
+        ns = argparse.Namespace(
+            dir=segdir, model=model, prompt_file=prompt_file,
+            config_file=None, config_json=f.get("config_json") or None,
+            host=f.get("host") or None,
+            seed=int(f["seed"]) if f.get("seed") else None,
+            ext=f.get("ext") or "mov", backend=f.get("backend") or None,
+            batch=(f.get("batch") or "").strip() or None, manifest=None,
+            chain="image" if f.get("chain") else None,
+            on_non_grid=on_grid)
+        # base config: per-model template if present, else the last completed
+        # job's config — same fallback as /api/add
+        if not (HERE / "templates" / f"{model}.json").exists():
+            with contextlib.closing(ltxq.db()) as con0:
+                row = con0.execute(
+                    "SELECT config_text FROM jobs WHERE status='done' AND "
+                    "config_text IS NOT NULL ORDER BY created_at DESC").fetchone()
+            if not row:
+                return flask.jsonify(error="no config: add templates/" + model
+                                    + ".json or run 'Fill config from last job' "
+                                    "on the main form once"), 400
+            ns.config_file = STAGE / f"cfg_{int(time.time()*1000)}.json"
+            ns.config_file.write_text(row["config_text"])
+        out, err = _capture(ltxq.cmd_add_batch, ns)
+        if err:
+            return flask.jsonify(error=err), 400
+        jids = re.findall(r"^([0-9a-f]{10})\s", out, re.M)
+        for jid in jids:
+            _publish_job(jid)
+        return flask.jsonify(jids=jids, report=out)
+    finally:
+        if staged_dir:
+            shutil.rmtree(staged_dir, ignore_errors=True)
 
 
 @app.get("/api/view/<jid>")

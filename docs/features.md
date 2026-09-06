@@ -74,10 +74,29 @@
   resolution / fps — no re-encode fallback in v1); missing artifacts disable
   the button. Runs as a local subprocess in the server process — safe to use
   while the queue renders
+- Audio batch form: pick or drop a segment folder (or paste a server-side
+  path) and queue one job per `.wav` with the same frame/prompt/grid rules as
+  `add-batch` — model/host/ext/seed/config-overlay/batch-label fields, shared
+  fallback prompt, non-8n+1 policy selector, visual-continuity checkbox
+  (previous segment's last frame as `--image`); validation failures list
+  every offending segment and queue nothing
 
 ### CLI
-- `add/ls/run/cancel/regen/check/probe/models/stage/reconcile/
+- `add/add-batch/ls/run/cancel/regen/check/probe/models/stage/reconcile/
   serve-start/serve-stop/doctor/ui`
+- `add-batch <dir>`: audio-segment batch composer (see
+  expansion-of-this-idea.md Idea 1) — one job per `.wav` in a segment dir,
+  `numFrames` per job from the cutting helper's manifest (verbatim,
+  cross-checked) or ffprobed from the wav and snapped onto the 8n+1 grid
+  (non-grid lengths default to round-up + silence pad; `--on-non-grid
+  round-down|refuse` for the alternatives); prompts from same-basename
+  `.txt` sidecars falling back to `--prompt-file`; batch label defaults to
+  the manifest's Original File stem; the whole batch is validated before
+  anything is queued; `--chain` gives visual continuity — segments 2..N
+  get the previous segment's last frame attached as `--image` (a lone
+  first-frame is invalid; it only pairs with `--last-frame`). Batch-chained
+  jobs defer dispatch until the rest of the batch is done, so the batch
+  self-serializes across any number of hosts
 - `doctor`: db self-checks (set_job single-row), ssh reachability, remote
   shell arithmetic, worker liveness, flask presence
 
@@ -93,9 +112,12 @@
 - Delete removes input copies with the record (by design, but easy to regret;
   Load-before-delete is the mitigation).
 - Remote host going away mid-job → `failed: process gone`; no auto-retry.
-- Chain continuation assumes serial execution: with several hosts dispatching
-  in parallel, two flagged jobs claimed in the same instant both continue from
-  the same predecessor.
+- Chain continuation with a batch label is race-free: batch-chained jobs
+  defer dispatch while a batch mate is still active, so each launches only
+  after its predecessor finished (the batch runs serially). Unbatched chain
+  jobs keep the global "most recent finished" scope, which still assumes
+  serial execution: two claimed in the same instant continue from the same
+  predecessor.
 
 ## TODOs / ideas
 

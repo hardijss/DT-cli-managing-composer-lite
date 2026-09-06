@@ -9,25 +9,29 @@ actually implemented it graduates to [features.md](features.md) and the
 
 ## Idea 1 — Manifest-driven audio-segment batch composition
 
-**Status: sketch**
+**Status: Done (v1)** — shipped as `ltxq add-batch <segment-dir>` (audio mode;
+2026-09-06): manifest-or-ffprobe frame resolution, sidecar prompts, grid
+policy, per-job config numFrames, shared `create_job()` path, plus the
+dashboard's audio-batch form (`/api/add-batch`, API 1.6 — folder picker/drop
+or a server-side path). Not implemented: reassembly (Idea 4 territory).
 
 ### The scenario
 
-An audio file has been pre-processed for LTX generation compliance: cut into
-N segments whose lengths are frame-locked to the `numFrames` grid
-(8n+1 frames at 25 fps — the LTX-2 constraint), each segment exported as a
-wav, plus a manifest txt describing them. Today each of those segments needs a
+An audio file has been pre-processed for LTX generation compliance by an
+external cutting helper: cut into N segments frame-locked to the `numFrames`
+grid (8n+1 frames at 25 fps — the LTX-2 constraint), each exported as a wav,
+plus an optional manifest txt describing them. Today each segment needs a
 separate manual `add`, with `numFrames` hand-edited in the config JSON per
-segment. The idea: **read the manifest and compose/queue one job per segment
-automatically**, each with its `config.json` `numFrames` set from the manifest
-and its own segment wav attached as `--audio` conditioning.
+segment. The idea: **compose/queue one job per segment automatically**, each
+with its `config.json` `numFrames` set for that segment and its own segment
+wav attached as `--audio` conditioning.
 
-### Input contract (as produced today)
+### Input contract
 
-A directory containing:
+A segment directory containing:
 
 - `Name_0001.wav … Name_NNNN.wav` — the segment files
-- a manifest like:
+- optionally a manifest next to them, as the helper writes it:
 
 ```
 # 25 FPS Audio Segment Frame Length Manifest
@@ -36,6 +40,7 @@ A directory containing:
 # Format: [Filename] -> [Frames at 25 FPS] (Duration, 8n+1 Status)
 
 Banderos Cats-2_0001.wav: 217 frames (8.680s, 8n+1 (n=27))
+Banderos Cats-2_0002.wav: 209 frames (8.360s, 8n+1 (n=26))
 ...
 Banderos Cats-2_0008.wav: 181 frames (7.240s, Non-8n+1)
 
@@ -50,43 +55,78 @@ Banderos Cats-2_0008.wav: 181 frames (7.240s, Non-8n+1)
 181
 ```
 
-### What the composer would do
+- optionally per-segment prompt sidecars: same basename as the wav with a
+  `.txt` extension (`Name_0001.txt` …). The sidecar **is** that segment's
+  prompt — spoken text changes per segment, so this is the primary prompt
+  source, not an override footnote.
+
+### Frames: where each job's numFrames comes from
+
+1. **Manifest present** → parse the per-file lines (`<file>: <N> frames`) and
+   take N **verbatim** as that job's `numFrames`. The helper owns grid
+   compliance; the composer never re-derives from the manifest. Cross-checks,
+   all refusing the batch on mismatch: number of per-file lines == number of
+   wavs in the dir == `Total Segments` header; the Raw Frame Counts block
+   must equal the per-file values in the same order; manifest header fps
+   (e.g. `# 25 FPS …`) must equal the template config's `fps`.
+2. **No manifest** → the wav is self-describing: ffprobe each segment,
+   `frames = duration × template fps`, snapped onto the 8n+1 grid per the
+   straggler policy below (default up + silence pad), and the wav is fitted
+   locally with ffmpeg to `frames / fps` seconds into the job dir.
+   (ffmpeg/ffprobe are already hard dependencies — chain extraction and the
+   merge tray use them.)
+
+**Non-8n+1 stragglers** (the helper can emit them — see `_0008` above):
+default round **up** to the grid (181 → 185) and pad the wav with silence to
+match (7.24 s → 7.40 s), noting it in the job record — the spoken content is
+never cut, the model just holds ~0.16 s longer. `--on-non-grid round-down`
+trims the tail instead (never invents duration, only loses ~0.16 s);
+`--on-non-grid refuse` aborts the batch for anyone who wants the helper's
+output strict.
+
+### Prompts
+
+Per segment: the sidecar `Name_NNNN.txt` if present, else the shared
+`--prompt-file`. A segment with neither fails validation (every job needs a
+prompt). Job `name` is derived from the **segment basename**, not the prompt
+prefix — with per-segment prompts the usual prompt-derived name would make
+the dashboard unnavigable.
+
+### What the composer does
 
 - A new command, e.g. `ltxq.py add-batch <segment-dir>` (plus — later — a
   bulk mode on the web form), taking the same shared arguments as `add`
-  (prompt / prompt-file, model, `--config-file` template, backend, …).
-- Parse the manifest; for each segment create one job where:
-  - `config.numFrames` is overridden with the segment's frame count
-    (everything else in the config template is left untouched);
-  - `--audio` carries that segment's wav;
-  - an optional `batch` label defaults to the original file name from the
-    manifest header ("Banderos Cats-2") — the existing 📦 badge and
-    chain-scoping machinery then apply for free.
+  (model, `--config-file`/`--config-json` template, `--host`, `--seed`,
+  `--ext`, `--backend`, shared `--prompt-file`, …).
+- **Validate the whole batch up front, all-or-nothing** (counts, fps guard,
+  grid policy, prompt coverage), reporting a per-item error list — a half
+  batch is worse than none, and nothing dispatches until the engine runs
+  anyway, so failing fast costs nothing.
+- Per segment, one job where:
+  - `config.json` is the template with `numFrames` set (config-level, not the
+    engine `--frames` override — config is what `regen` reuses, what
+    `metadata.json` duration comes from, and what the UI displays; the
+    `--frames` override stays free for manual one-offs);
+  - `prompt.txt` is the sidecar or the shared prompt;
+  - `--audio` carries that segment's wav (silence-padded or trimmed per the
+    grid policy);
+  - `batch` label defaults to the `Original File` stem from the manifest
+    header ("Banderos Cats-2"), else the directory name — the existing 📦
+    badge and chain-scoping machinery apply for free.
+- **Seed**: `--seed` applies to all segments; absent → random per segment
+  (current `add` behavior, i.e. variety by default).
 - Jobs are independent of each other, so multi-host dispatch "just works";
   only any final reassembly step would need to wait for the whole batch.
 
-### Decisions to make
+### Implementation shape (shared with the other batch ideas)
 
-1. **Manifest parsing.** Prefer the "Raw Frame Counts" integer block (one per
-   line, order matches the zero-padded segment numbering); use the per-file
-   lines only to cross-check names. Sanity-check: number of integers ==
-   number of wavs in the dir == `Total Segments`. Refuse on mismatch.
-2. **Non-8n+1 stragglers.** The manifest flags them (e.g. the 181-frame last
-   segment above = 8·22+5). Options:
-   - round **down** to the nearest 8n+1 (181 → 177) and trim the wav to
-     match (7.24 s → 7.08 s);
-   - round **up** (181 → 185) and pad the wav with silence;
-   - refuse the batch and demand a re-cut.
-   Proposal: round down + trim, note it in the job record — never invents
-   duration, only loses ~0.16 s. Final call open.
-3. **Seed policy.** One shared seed for all segments (consistent look across
-   the song) vs per-segment random (variety, current `add` behavior).
-   Proposal: pass `--seed` through; absent → random per segment as today.
-4. **fps guard.** The manifest states its fps (25); assert the template
-   config's `fps` matches, else refuse — mismatched fps would silently
-   mis-time every segment.
-5. **Per-segment prompts (later).** Optional sidecar `Name_0001.txt` next to
-   the wav overrides the shared prompt for that segment.
+The loop body is `add`'s creation path — extract it into a `create_job()`
+helper (used by `add`, the web API, and every batch mode), then each batch
+mode is a **planner** that produces a list of
+`{assets, prompt, num_frames, name}` items followed by one shared queueing
+loop. That planner→queue split is what later batch ideas (keyframe pairs,
+LLM prompt factory) plug into: their manifests are just serialized planner
+output.
 
 ### Natural companion: reassembly pass
 
@@ -101,9 +141,18 @@ closes the loop — one song in, one finished music video out — and could be a
 
 - Does the cutting/manifest step itself ever move into ltxq (see Idea 3), or
   does that stay an external tool feeding `add-batch`?
-- CLI-only first, or bulk drop on the web form from the start?
-- Is visual continuity across segments ever wanted (chained first-frames),
-  given each segment has its own audio conditioning? Probably not for v1.
+
+Resolved while shipping:
+
+- CLI vs web form — both: `add-batch` shipped with the dashboard's audio
+  batch form (`/api/add-batch`) in the same change.
+- Visual continuity across segments — yes, shipped as `--chain` (and a
+  checkbox on the form): segments 2..N get the previous segment's last frame
+  attached as `--image` (not `--first-frame` — a lone first frame is invalid,
+  it only pairs with `--last-frame`). To make that deterministic under
+  parallel hosts, batch-chained jobs defer dispatch while a batch mate
+  is still active, so a chained batch self-serializes (without `--chain`,
+  segments stay independent and dispatch in parallel as before).
 
 ---
 

@@ -442,9 +442,23 @@ def dispatch(c, con):
                            (h["alias"],)).fetchone()[0]
         if busy >= h["max_jobs"]:
             continue
-        job = con.execute("SELECT * FROM jobs WHERE status='queued' AND "
-                          "(host IS NULL OR host=?) ORDER BY created_at, rowid LIMIT 1",
-                          (h["alias"],)).fetchone()
+        job = None
+        for cand in con.execute(
+                "SELECT * FROM jobs WHERE status='queued' AND "
+                "(host IS NULL OR host=?) ORDER BY created_at, rowid",
+                (h["alias"],)).fetchall():
+            if cand["chain"] and cand["batch"]:
+                # batch-scoped chain: wait for the batch to catch up so the
+                # predecessor's last frame is always the most recent finished
+                # one in the batch (self-serializes across hosts)
+                active = con.execute(
+                    "SELECT COUNT(*) FROM jobs WHERE batch=? AND id!=? AND status IN "
+                    "('uploading','running','collecting','suspect','cancelling')",
+                    (cand["batch"], cand["id"])).fetchone()[0]
+                if active:
+                    continue
+            job = cand
+            break
         if job:
             cur = con.execute("UPDATE jobs SET status='uploading', host=? "
                               "WHERE id=? AND status='queued'", (h["alias"], job["id"]))
@@ -838,15 +852,14 @@ def cmd_add(a):
     finally:
         con.close()
 
-def _cmd_add(c, con, a):
-    if ".." in a.model or a.model.startswith("/"):
-        sys.exit("invalid --model: must be a model id, not a path with '..' or '/'")
-    jid = uuid.uuid4().hex[:10]
-    prompt = Path(a.prompt_file).read_text()
-    if a.config_file:
-        cfg_text = Path(a.config_file).read_text()
+def _load_cfg(c, con, model, config_file, config_json):
+    """Resolve a job's config: --config-file, else the per-model template.
+    Applies --config-json on top, runs the shared warnings, and returns
+    (cfg_text, parsed obj) — composers parse once and derive per-item copies."""
+    if config_file:
+        cfg_text = Path(config_file).read_text()
     else:
-        t = HERE / "templates" / f"{a.model}.json"
+        t = HERE / "templates" / f"{model}.json"
         if not t.exists():
             sys.exit(f"no --config-file and no template at {t}")
         cfg_text = t.read_text()
@@ -862,48 +875,79 @@ def _cmd_add(c, con, a):
     if dups:
         print("warn: duplicate keys in config (last value wins): "
               + ", ".join(sorted(set(dups))))
-    if a.config_json:
-        obj.update(json.loads(a.config_json)); cfg_text = json.dumps(obj, indent=2)
+    if config_json:
+        obj.update(json.loads(config_json)); cfg_text = json.dumps(obj, indent=2)
     for k in ("width", "height"):
         if obj.get(k) and obj[k] % 64:
             print(f"warn: {k}={obj[k]} is not a multiple of 64")
     cm = obj.get("model")
-    if isinstance(cm, str) and cm and cm != a.model:
+    if isinstance(cm, str) and cm and cm != model:
         reg = con.execute("SELECT model FROM registry WHERE name=?", (cm,)).fetchone()
-        if reg and reg[0] != a.model:
-            print(f"warn: config model '{cm}' = {reg[0]} but --model is {a.model} "
+        if reg and reg[0] != model:
+            print(f"warn: config model '{cm}' = {reg[0]} but --model is {model} "
                   "— --model governs resolution")
         elif not reg:
-            print(f"note: config carries model name '{cm}'; resolution uses --model {a.model}")
+            print(f"note: config carries model name '{cm}'; resolution uses --model {model}")
     loras = [l.get("file") for l in obj.get("loras", []) if l.get("file")]
     if loras:
         print("lora deps:", ", ".join(loras), "(run 'check <id>' after host assignment)")
-    batch = re.sub(r"[^A-Za-z0-9._-]+", "_", (a.batch or "").strip())[:48] or None
-    if batch and batch != a.batch.strip():
-        print(f"batch label normalized: {batch}")
-    name = a.name or " ".join(prompt.split())[:48] or jid
+    return cfg_text, obj
+
+def _norm_batch(label):
+    b = re.sub(r"[^A-Za-z0-9._-]+", "_", (label or "").strip())[:48] or None
+    if label and b != label.strip():
+        print(f"batch label normalized: {b}")
+    return b
+
+def create_job(c, con, model, prompt, cfg_text, assets, extra, *, host=None,
+               name=None, parent=None, ext="mov", backend=None, chain=None,
+               batch=None, num_frames=None, fps=None):
+    """The shared tail of every job-creation path (add, the web API, batch
+    composers): write the job dir (prompt.txt, config.json, copied assets,
+    runner.sh) and insert the row. assets is a list of (flag|None, path)
+    pairs — each file is copied into the job dir; extra is a flat token list
+    appended verbatim to the engine CLI. Returns the new jid."""
+    jid = uuid.uuid4().hex[:10]
+    if not name:
+        name = " ".join(prompt.split())[:48] or jid
     d = HERE / "jobs" / jid; d.mkdir(parents=True)
     (d / "prompt.txt").write_text(prompt)
     (d / "config.json").write_text(cfg_text)
+    rows = []
+    for flag, p in assets:
+        src = Path(p).expanduser()
+        shutil.copyfile(src, d / src.name)
+        rows.append({"flag": flag, "file": src.name, "local": str(src)})
+    host_cli = c["cli_path"]
+    if host:
+        hr = con.execute("SELECT cli_path FROM hosts WHERE alias=?",
+                         (host,)).fetchone()
+        if hr and hr["cli_path"]: host_cli = hr["cli_path"]
+    (d / "runner.sh").write_text(make_runner(model, host_cli, c["use_pty"],
+                                             rows, extra, c, ext))
+    con.execute("INSERT INTO jobs(id,created_at,name,parent_id,host,model,prompt,"
+                "config_text,status,local_dir,pct_ts,assets,extra_args,num_frames,"
+                "fps,ext,backend,chain,batch) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (jid, int(time.time()), name, parent, host, model, prompt,
+                 cfg_text, "queued", str(d), int(time.time()), json.dumps(rows),
+                 json.dumps(extra), num_frames, fps, ext, backend, chain, batch))
+    con.commit()
+    return jid
+
+def _cmd_add(c, con, a):
+    if ".." in a.model or a.model.startswith("/"):
+        sys.exit("invalid --model: must be a model id, not a path with '..' or '/'")
+    prompt = Path(a.prompt_file).read_text()
+    cfg_text, obj = _load_cfg(c, con, a.model, a.config_file, a.config_json)
     assets = []
     for attr, flag in FLAGMAP:
         p = getattr(a, attr, None)
-        if p:
-            src = Path(p).expanduser()
-            shutil.copyfile(src, d / src.name)
-            assets.append({"flag": flag, "file": src.name, "local": str(src)})
+        if p: assets.append((flag, p))
     for p in a.upload or []:
-        src = Path(p).expanduser()
-        shutil.copyfile(src, d / src.name)
-        assets.append({"flag": None, "file": src.name, "local": str(src)})
+        assets.append((None, p))
     extra = []
     for ea in a.extra_arg or []:
         extra += shlex.split(ea)
-    host_cli = c["cli_path"]
-    if a.host:
-        hr = con.execute("SELECT cli_path FROM hosts WHERE alias=?",
-                         (a.host,)).fetchone()
-        if hr and hr["cli_path"]: host_cli = hr["cli_path"]
     seed = a.seed if a.seed is not None else \
         (random.randint(1, 2**31 - 1) if a.new_seed else None)
     if seed is not None:
@@ -911,17 +955,198 @@ def _cmd_add(c, con, a):
     if a.frames is not None:
         if a.frames < 1: sys.exit("--frames must be a positive integer")
         extra += ["--frames", str(a.frames)]; print("frames:", a.frames)
-    (d / "runner.sh").write_text(make_runner(a.model, host_cli, c["use_pty"],
-                                             assets, extra, c, a.ext))
-    con.execute("INSERT INTO jobs(id,created_at,name,parent_id,host,model,prompt,"
-                "config_text,status,local_dir,pct_ts,assets,extra_args,num_frames,"
-                "fps,ext,backend,chain,batch) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (jid, int(time.time()), name, a.parent, a.host, a.model, prompt,
-                 cfg_text, "queued", str(d), int(time.time()), json.dumps(assets),
-                 json.dumps(extra), a.frames if a.frames is not None
-                 else obj.get("numFrames"), obj.get("fps"),
-                 a.ext, a.backend, a.chain, batch))
-    con.commit(); print(jid)
+    jid = create_job(c, con, a.model, prompt, cfg_text, assets, extra,
+                     host=a.host, name=a.name, parent=a.parent, ext=a.ext,
+                     backend=a.backend, chain=a.chain, batch=_norm_batch(a.batch),
+                     num_frames=a.frames if a.frames is not None
+                                else obj.get("numFrames"),
+                     fps=obj.get("fps"))
+    print(jid)
+
+# --- add-batch: audio-segment batch composer (docs/expansion-of-this-idea.md Idea 1)
+
+NATNUM = re.compile(r"^(.*?)(\d+)$")
+
+def _natural_key(p):
+    """Sort key for zero-padded segment names: common stem first, then the
+    embedded number numerically (gaps in numbering are fine)."""
+    m = NATNUM.search(p.stem)
+    return (m.group(1) if m else p.stem, int(m.group(2)) if m else -1, p.name)
+
+def _snap_frames(raw, up=True):
+    """Snap a raw frame count onto the 8n+1 grid (the LTX-2 constraint):
+    up pads ~a fraction of a second of silence, down trims the tail."""
+    n = ((raw - 1) + 7) // 8 if up else (raw - 1) // 8
+    return 8 * max(n, 1) + 1
+
+def _parse_audio_manifest(path):
+    """Parse the cutting helper's manifest; None when the file doesn't carry
+    the header (prompt sidecars etc. are excluded by this check)."""
+    text = Path(path).read_text()
+    if "Frame Length Manifest" not in text:
+        return None
+    m = re.search(r"^#\s*(\d+)\s*FPS", text, re.M)
+    fps = int(m.group(1)) if m else None
+    m = re.search(r"^#\s*Original File:\s*(.+)$", text, re.M)
+    orig = m.group(1).strip() if m else None
+    m = re.search(r"^#\s*Total Segments:\s*(\d+)", text, re.M)
+    total = int(m.group(1)) if m else None
+    per = {Path(n).name: int(f) for n, f in
+           re.findall(r"^(.+?\.wav):\s*(\d+)\s+frames", text, re.M | re.I)}
+    i = text.find("# Raw Frame Counts")
+    raw = [int(x) for x in re.findall(r"^\s*(\d+)\s*$", text[i:], re.M)] if i >= 0 else []
+    return {"fps": fps, "orig": orig, "total": total, "per": per, "raw": raw}
+
+def _wav_duration(path):
+    r = subprocess.run([ff_tool("ffprobe"), "-v", "error", "-show_entries",
+                        "format=duration", "-of", "csv=p=0", str(path)],
+                       capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        raise RuntimeError("ffprobe: " + r.stderr.strip()[-150:])
+    return float(r.stdout.strip())
+
+def _fit_wav(src, frames, fps, dst, mode):
+    """Fit src to exactly frames/fps seconds: 'pad' appends silence to the
+    grid length (never invents audible content), 'trim' drops the tail that
+    doesn't fit."""
+    args = [ff_tool("ffmpeg"), "-y", "-v", "error", "-i", str(src)]
+    if mode == "pad":
+        args += ["-af", "apad"]
+    args += ["-t", f"{frames / fps:.6f}", str(dst)]
+    r = subprocess.run(args, capture_output=True, text=True, timeout=300)
+    if r.returncode != 0 or not dst.exists():
+        raise RuntimeError(f"ffmpeg {mode}: " + (r.stderr.strip()[-150:] or "no output"))
+    return dst
+
+def cmd_add_batch(a):
+    c, con = conf(), db(); sync_hosts(con)
+    try:
+        return _cmd_add_batch(c, con, a)
+    finally:
+        con.close()
+
+def _cmd_add_batch(c, con, a):
+    """Audio mode: one job per wav segment in a directory. Frames come from
+    the helper's manifest (verbatim, cross-checked) or ffprobe + grid snap;
+    prompts from same-basename .txt sidecars, falling back to --prompt-file.
+    Non-8n+1 lengths default to rounding up with a silence pad. Validates the
+    whole batch before queueing anything."""
+    if ".." in a.model or a.model.startswith("/"):
+        sys.exit("invalid --model: must be a model id, not a path with '..' or '/'")
+    segdir = Path(a.dir).expanduser()
+    if not segdir.is_dir():
+        sys.exit(f"not a directory: {segdir}")
+    wavs = sorted((p for p in segdir.iterdir()
+                   if p.suffix.lower() == ".wav" and not p.name.startswith(".")),
+                  key=_natural_key)
+    if not wavs:
+        sys.exit(f"no .wav segments in {segdir}")
+    if a.manifest:
+        man = _parse_audio_manifest(Path(a.manifest).expanduser())
+        if man is None:
+            sys.exit(f"{a.manifest} does not carry a Frame Length Manifest header")
+    else:
+        found = [(p, _parse_audio_manifest(p)) for p in sorted(segdir.glob("*.txt"))]
+        found = [(p, m) for p, m in found if m]
+        if len(found) > 1:
+            sys.exit(f"{len(found)} manifests in {segdir} — pass --manifest explicitly")
+        man_path, man = found[0] if found else (None, None)
+        if man:
+            print(f"manifest: {man_path.name}")
+    cfg_text, obj = _load_cfg(c, con, a.model, a.config_file, a.config_json)
+    tfps = obj.get("fps")
+    fps = float(tfps) if tfps else (float(man["fps"]) if man and man["fps"] else None)
+    if man and man["fps"] and tfps and float(man["fps"]) != float(tfps):
+        sys.exit(f"manifest fps {man['fps']} != template config fps {tfps} — refusing "
+                 "(mismatched fps would silently mis-time every segment)")
+    errors, items = [], []
+    if man:
+        if man["total"] is not None and man["total"] != len(wavs):
+            errors.append(f"manifest Total Segments ({man['total']}) != wavs in dir ({len(wavs)})")
+        if set(man["per"]) != {p.name for p in wavs}:
+            errors.append("manifest file lines don't match the wavs in the dir")
+        if man["raw"] and man["raw"] != list(man["per"].values()):
+            errors.append("Raw Frame Counts block != per-file frame counts")
+    for p in wavs:
+        if man:
+            src_frames = man["per"].get(p.name)
+            if src_frames is None:
+                errors.append(f"{p.name}: no manifest entry"); continue
+        else:
+            try:
+                dur = _wav_duration(p)
+            except (RuntimeError, ValueError) as e:
+                errors.append(f"{p.name}: {e}"); continue
+            if not fps:
+                errors.append(f"{p.name}: no manifest and no fps (template config or "
+                              "manifest header) — cannot derive a frame count"); continue
+            src_frames = round(dur * fps)
+            if src_frames < 9:
+                errors.append(f"{p.name}: {dur:.2f}s is under the 9-frame minimum "
+                              f"at {fps:g} fps"); continue
+        note, fit = "", None
+        if src_frames % 8 != 1:
+            if a.on_non_grid == "refuse":
+                errors.append(f"{p.name}: {src_frames} frames is Non-8n+1 "
+                              "(--on-non-grid refuse)"); continue
+            frames = _snap_frames(src_frames, up=(a.on_non_grid == "round-up"))
+            fit = "pad" if frames > src_frames else "trim"
+            note = (f"non-8n+1 {src_frames} → {frames} frames "
+                    f"({abs(src_frames - frames) / fps:.2f}s "
+                    + ("padded" if fit == "pad" else "trimmed") + ")")
+        else:
+            frames = src_frames
+        sidecar = segdir / (p.stem + ".txt")
+        if sidecar.exists():
+            prompt = sidecar.read_text()
+        elif a.prompt_file:
+            prompt = Path(a.prompt_file).read_text()
+        else:
+            errors.append(f"{p.name}: no {p.stem}.txt sidecar and no --prompt-file")
+            continue
+        if not prompt.strip():
+            errors.append(f"{p.name}: empty prompt ({sidecar.name if sidecar.exists() else '--prompt-file'})")
+            continue
+        items.append({"wav": p, "frames": frames, "prompt": prompt, "name": p.stem,
+                      "note": note, "fit": fit})
+    if errors:
+        for e in errors:
+            print("ERROR:", e, file=sys.stderr)
+        sys.exit(f"batch refused: {len(errors)} problem(s) across {len(wavs)} segments — nothing queued")
+    if man and man["orig"]:
+        default_batch = Path(man["orig"]).stem
+    else:
+        default_batch = segdir.name
+    batch = _norm_batch(a.batch or default_batch)
+    seed_extra = ["--seed", str(a.seed)] if a.seed is not None else []
+    chain = "image" if a.chain else None
+    if chain:
+        print("chain: segments 2..N get the previous segment's last frame as "
+              "--image (batch dispatch self-serializes)")
+    tmp = HERE / "jobs" / "_tmp" / ("batch_" + uuid.uuid4().hex[:8])
+    tmp.mkdir(parents=True, exist_ok=True)
+    print(f"queueing {len(items)} job(s) as batch '{batch}'")
+    try:
+        for i, it in enumerate(items):
+            src = it["wav"]
+            if it["fit"]:
+                try:
+                    src = _fit_wav(it["wav"], it["frames"], fps,
+                                   tmp / it["wav"].name, it["fit"])
+                except RuntimeError as e:
+                    print(f"ERROR: {it['name']}: {e} — segment skipped", file=sys.stderr)
+                    continue
+            job_cfg = dict(obj); job_cfg["numFrames"] = it["frames"]
+            jid = create_job(c, con, a.model, it["prompt"],
+                             json.dumps(job_cfg, indent=2),
+                             [("--audio", str(src))], list(seed_extra),
+                             host=a.host, name=it["name"], ext=a.ext,
+                             backend=a.backend, batch=batch, chain=chain if i else None,
+                             num_frames=it["frames"], fps=tfps)
+            print(f"{jid}  {it['name']}  {it['frames']} frames"
+                  + (f"  [{it['note']}]" if it["note"] else ""))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 def cmd_regen(a):
     con = db(); sync_hosts(con)
@@ -1346,6 +1571,32 @@ def main():
                         "to this slot")
     g.add_argument("--batch", help="group label (e.g. moodboard-v1); 'chain' then "
                                    "scopes to the previous finished job in this batch")
+    g = sp.add_parser("add-batch", help="queue one job per .wav segment in a directory "
+                                        "(frames from the cutting helper's manifest, or ffprobe)")
+    g.add_argument("dir")
+    g.add_argument("--model", required=True)
+    g.add_argument("--prompt-file",
+                   help="shared fallback prompt for segments without a .txt sidecar")
+    g.add_argument("--config-file"); g.add_argument("--config-json")
+    g.add_argument("--host"); g.add_argument("--seed", type=int)
+    g.add_argument("--ext", default="mov", choices=["mov", "mp4", "png"])
+    g.add_argument("--backend", choices=["oneshot", "serve"])
+    g.add_argument("--batch", help="group label (default: the manifest's Original File "
+                                   "stem, else the directory name)")
+    g.add_argument("--manifest",
+                   help="explicit manifest path (default: auto-detect the single "
+                        "header-bearing .txt in the segment dir)")
+    g.add_argument("--on-non-grid", choices=["round-up", "round-down", "refuse"],
+                   default="round-up",
+                   help="a segment whose frame count is not 8n+1: round up and pad "
+                        "the wav with silence (default), round down and trim it, "
+                        "or refuse the batch")
+    g.add_argument("--chain", action="store_true",
+                   help="visual continuity: segments 2..N get the previous "
+                        "segment's last frame attached as --image at launch time "
+                        "(first-frame alone is invalid — it only pairs with "
+                        "--last-frame); batch-chained jobs defer dispatch until "
+                        "the rest of the batch is done, so the batch runs serially")
     g = sp.add_parser("regen"); g.add_argument("id")
     g.add_argument("--model"); g.add_argument("--config-json"); g.add_argument("--host")
     g.add_argument("--name"); g.add_argument("--seed", type=int)
@@ -1376,7 +1627,8 @@ def main():
     g = sp.add_parser("serve-stop"); g.add_argument("alias")
     g.add_argument("--force", action="store_true")
     args = p.parse_args()
-    {"add": cmd_add, "ls": cmd_ls, "run": cmd_run, "cancel": cmd_cancel,
+    {"add": cmd_add, "add-batch": cmd_add_batch, "ls": cmd_ls, "run": cmd_run,
+     "cancel": cmd_cancel,
      "regen": cmd_regen, "probe": cmd_probe, "reconcile": cmd_reconcile,
      "models": cmd_models, "check": cmd_check, "stage": cmd_stage,
      "flags": cmd_flags,

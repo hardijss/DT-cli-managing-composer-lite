@@ -194,6 +194,52 @@ a { color:var(--acc); text-decoration:none; }
     </form>
   </div>
 
+  <h2>Audio batch <span class="sub">(one job per .wav — frames from the cutting
+    helper's manifest or ffprobe, prompts from same-named .txt sidecars)</span></h2>
+  <div class="card">
+    <form id="batchform">
+      <div class="row">
+        <div style="flex:2; min-width:220px"><label>Model</label>
+          <select id="bmodel" required><option value="">loading…</option></select></div>
+        <div style="flex:1; min-width:120px"><label>Host</label>
+          <select id="bhost" style="width:auto"><option value="">auto</option></select></div>
+        <div style="flex:1; min-width:90px"><label>Ext</label>
+          <select id="bext" style="width:auto">
+            <option>mov</option><option>mp4</option><option>png</option></select></div>
+      </div>
+      <div class="row" style="margin-top:4px">
+        <div class="grow" style="min-width:240px"><label>Segment folder (on this machine)</label>
+          <input id="bdir" class="mono" placeholder="/path/to/segments"></div>
+        <div style="min-width:260px"><label>…or drop the folder here / pick it</label>
+          <div class="filerow"><label class="filedrop" tabindex="0" data-dz="batchseg">
+            <input type="file" id="batchseg" webkitdirectory multiple>
+            <span class="dz-label">choose folder (uploads the files)</span></label>
+            <button type="button" class="sec" data-clear="batchseg" title="clear selected folder" hidden>✕</button></div></div>
+      </div>
+      <label>Shared prompt — used for segments without a <span class="mono">.txt</span> sidecar</label>
+      <textarea id="bprompt" style="min-height:56px"></textarea>
+      <div class="row" style="margin-top:10px">
+        <div><label>Non-8n+1 segment</label>
+          <select id="bonnongrid" style="width:auto">
+            <option value="round-up">round up + silence pad</option>
+            <option value="round-down">round down + trim</option>
+            <option value="refuse">refuse the batch</option></select></div>
+        <div><label>Seed</label><input id="bseed" type="number" style="width:110px"></div>
+        <div><label>Batch label</label><input id="bbatch" placeholder="default: manifest / folder name"></div>
+        <div><label>Config JSON overlay</label><input id="bcfg" class="mono"
+          placeholder='{"steps": 9} — optional'></div>
+      </div>
+      <label style="margin-top:10px"><input type="checkbox" id="bchain" style="width:auto"> Visual
+        continuity — segments 2..N get the previous segment's last frame as
+        <span class="mono">--image</span> (the batch then dispatches serially,
+        on any number of hosts)</label>
+      <div class="row" style="margin-top:14px">
+        <button type="submit">Queue batch</button>
+        <span class="sub" id="batchmsg"></span>
+      </div>
+    </form>
+  </div>
+
   <h2>History</h2>
   <div class="card" style="padding:6px 10px">
   <table><thead><tr><th>id</th><th>name</th><th>status</th><th>backend</th>
@@ -766,12 +812,15 @@ async function loadModels(alias) {
     }
     $("host").innerHTML = '<option value="">auto (hosts.yaml order)</option>' +
       st.hosts.map(h => `<option>${esc(h.alias)}</option>`).join("");
+    $("bhost").innerHTML = $("host").innerHTML;
   } catch (e) {}
   try {
     const m = await api("/api/models/" + (alias || "ltx-a"));
-    $("model").innerHTML = m.models.map(x =>
+    const opts = m.models.map(x =>
       `<option value="${esc(x.model)}">${esc(x.name)}</option>`).join("")
       || '<option value="">none downloaded</option>';
+    $("model").innerHTML = opts;
+    $("bmodel").innerHTML = opts;
     if (m.error) $("addmsg").textContent = "models: " + m.error;
   } catch (e) { $("addmsg").textContent = e.message; }
 }
@@ -834,6 +883,82 @@ $("addform").onsubmit = async ev => {
     const r = await api("/api/add", {method:"POST", body:fd});
     flash("queued " + r.jid); refresh();
   } catch (e) { flash(e.message, true); }
+};
+
+// ---- audio batch form: folder picker/drop (uploads) or server-side path ----
+let batchFiles = [];
+async function collectDropped(entry, out) {
+  // directory drag: expand via the entries API so a whole folder lands in one drop
+  if (!entry) return;
+  if (entry.isFile) {
+    const f = await new Promise((res, rej) => entry.file(res, rej));
+    out.push(f);
+  } else if (entry.isDirectory) {
+    const reader = entry.createReader();
+    let batch;
+    do {
+      batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+      for (const e of batch) await collectDropped(e, out);
+    } while (batch.length);
+  }
+}
+const bdz = document.querySelector('[data-dz="batchseg"]');
+const binp = $("batchseg");
+function batchSync() {
+  const wavs = batchFiles.filter(f => f.name.toLowerCase().endsWith(".wav")).length;
+  bdz.classList.toggle("filled", !!batchFiles.length);
+  bdz.querySelector(".dz-label").textContent = batchFiles.length
+    ? `${batchFiles.length} files selected (${wavs} .wav)` : "choose folder (uploads the files)";
+  document.querySelector('[data-clear="batchseg"]').hidden = !batchFiles.length;
+}
+binp.addEventListener("change", () => { batchFiles = [...binp.files]; batchSync(); });
+bdz.addEventListener("dragover", e => {
+  if (![...e.dataTransfer.types].includes("Files")) return;
+  e.preventDefault(); bdz.classList.add("over");
+});
+bdz.addEventListener("dragleave", () => bdz.classList.remove("over"));
+bdz.addEventListener("drop", async e => {
+  bdz.classList.remove("over");
+  const items = [...(e.dataTransfer.items || [])];
+  if (!items.length) return;                     // non-file drag: leave alone
+  e.preventDefault();
+  const out = [];
+  for (const it of items) {
+    const en = it.webkitGetAsEntry && it.webkitGetAsEntry();
+    if (en) await collectDropped(en, out);
+    else if (it.kind === "file" && it.getAsFile()) out.push(it.getAsFile());
+  }
+  if (out.length) { batchFiles = out; batchSync(); }
+});
+document.querySelector('[data-clear="batchseg"]').onclick = () => {
+  batchFiles = []; binp.value = ""; batchSync();
+};
+$("batchform").onsubmit = async ev => {
+  ev.preventDefault();
+  const fd = new FormData();
+  fd.set("model", $("bmodel").value);
+  if ($("bhost").value) fd.set("host", $("bhost").value);
+  fd.set("ext", $("bext").value);
+  fd.set("on_non_grid", $("bonnongrid").value);
+  if ($("bseed").value)  fd.set("seed", $("bseed").value);
+  if ($("bbatch").value) fd.set("batch", $("bbatch").value);
+  if ($("bcfg").value.trim())  fd.set("config_json", $("bcfg").value);
+  if ($("bprompt").value.trim()) fd.set("prompt", $("bprompt").value);
+  if ($("bchain").checked) fd.set("chain", "first_frame");
+  if (batchFiles.length) {
+    for (const f of batchFiles) fd.append("files", f, f.name);
+  } else if ($("bdir").value.trim()) {
+    fd.set("dir", $("bdir").value.trim());
+  } else {
+    return flash("pick a segment folder or enter its path", true);
+  }
+  $("batchmsg").textContent = "queueing…";
+  try {
+    const r = await api("/api/add-batch", {method:"POST", body:fd});
+    $("batchmsg").textContent = `queued ${r.jids.length} job(s)`;
+    flash(`batch queued: ${r.jids.length} job(s)`);
+    refresh();
+  } catch (e) { $("batchmsg").textContent = ""; flash(e.message, true); }
 };
 
 // ---- settings & server status overlay (⚙ next to the engine badge) ----

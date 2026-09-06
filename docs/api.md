@@ -1,6 +1,6 @@
 # HTTP API
 
-**API version: 1.5** (see [Versioning](#versioning) at the end).
+**API version: 1.6** (see [Versioning](#versioning) at the end).
 
 The dashboard, the native macOS app, and external job-composition tools are
 all clients of the same localhost API served by `ltxq.py ui` (Flask, in
@@ -120,6 +120,30 @@ Response: `{"jid": "<id>", "warnings": "..."}` (warnings may be empty).
 Batch submission: POST once per job. Jobs carrying the same `batch` label
 group in the UI, and dispatch order follows submission order
 (`created_at, rowid`).
+
+### `POST /api/add-batch` — queue an audio-segment batch *(since API 1.6)*
+
+Multipart/form-data. Queues one job per `.wav` in a segment directory (see
+`ltxq add-batch`, expansion-of-this-idea.md Idea 1): per-job `numFrames` from
+the cutting helper's manifest when one is present (verbatim, cross-checked)
+or ffprobed from each wav and snapped onto the 8n+1 grid; prompts from
+same-basename `.txt` sidecars falling back to `prompt`. The whole batch is
+validated before anything is queued — a refusal returns 400 with a per-item
+error list and no jobs created.
+
+| field | meaning |
+|---|---|
+| `model` | required, model id |
+| `dir` | segment directory **path on the server machine** (used when no files are uploaded) |
+| `files` | repeatable file part — the folder's contents uploaded from the browser (wavs, manifest, sidecars); staged flat into `jobs/_tmp` for the request, then removed |
+| `prompt` | shared fallback prompt for segments without a sidecar |
+| `config_json` | JSON overlay on the base config (per-model template, else last completed job's config — same fallback as `/api/add`) |
+| `batch` | label; default = manifest `Original File` stem, else directory name |
+| `host` / `seed` / `ext` / `backend` | as on `/api/add` (no `name`, `frames`, media slots — per-segment values are derived) |
+| `chain` | any non-empty value enables visual continuity: segments 2..N get the previous segment's last frame attached as `--image` at launch time (a lone first-frame is invalid — it only pairs with `--last-frame`); batch-chained jobs defer dispatch until the rest of the batch is done (serial batch) |
+| `on_non_grid` | `round-up` (default: pad wav with silence), `round-down` (trim), `refuse` |
+
+Response: `{"jids": ["<id>", …], "report": "<planner/queue output>"}`.
 
 ### `POST /api/regen/<jid>` (form)
 
@@ -278,6 +302,8 @@ data: {"hosts": [{"alias": "ltx-a", "worker_alive": true, ...}]}
 - **1.5** — adds the merge tray (`/api/merge/*`, `GET /api/merge/file/<name>`)
   and the `merge`/`merge_run` fields on `/api/state` plus a `merge` SSE
   event. No existing endpoint changed.
+- **1.6** — adds `POST /api/add-batch` (audio-segment batch composer). No
+  existing endpoint changed.
 
 Changes are additive: new endpoints, new optional request fields, new
 response fields. Breaking changes would bump the major version and be
