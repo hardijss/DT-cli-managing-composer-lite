@@ -29,6 +29,7 @@ environment — that *is* the credentials mechanism (no passwords in yaml).
 | `download_missing` | `false` | pass `--no-download-missing` |
 | `disable_preview` | `true` | pass `--disable-preview` |
 | `offline` | `false` | pass `--offline` |
+| `video_format` | `hevc` | pass `--video-format <v>` for video outputs; one of `prores4444`, `prores422hq`, `h264`, `hevc` — ProRes requires `.mov` (overridable per host) |
 
 ## hosts.yaml — per-host keys
 
@@ -42,6 +43,7 @@ environment — that *is* the credentials mechanism (no passwords in yaml).
 | `max_jobs` | `1` | concurrent in-flight jobs |
 | `models_dir` | probed | pinned models directory |
 | `cli_path` | global | per-host binary/version override |
+| `video_format` | global | per-host codec override; set to `""` to omit `--video-format` entirely |
 | `ssh_opts` | `[]` | extra ssh options |
 | `mux` | `true` | use ControlMaster multiplexing |
 | `idle_policy.enabled` | `false` | gate dispatch on host business |

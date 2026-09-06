@@ -105,13 +105,15 @@ diff. Grouped as the engine's help groups them:
 | `--audio-file`, `--audio-encoder-file`, `--audio-start-time`, `--audio-latents`, `--export-swift-audio-latents` | extra_arg (audio itself: dropzone) | no |
 | `--prompt-relay`, `--prompt-relay-file` | extra_arg | no |
 | `--nag-scale`, `--nag-tau`, `--nag-alpha` | extra_arg | no |
-| `-o/--output`, `--video-format` | output path ltxq-owned; ext (mov/mp4/png) is a UI select; codec: extra_arg | ext only |
+| `-o/--output`, `--video-format` | output path ltxq-owned; ext (mov/mp4/png) is a UI select; codec is a hosts.yaml preset (`video_format`, default `hevc`, per-host override, `""` disables) | ext only |
 | `--terminal-image`, `--terminal-image-protocol` | n/a in a queue | never |
 | `--download-missing/--no-download-missing`, `--disable-preview`, `--offline` | ltxq-owned (hosts.yaml) | settings pane |
 | `--remote`, `--remote-url/-port/-tls/-shared-secret`, `--cloud-compute`, `--api-key`, `--cloud-api-base-url` | ltxq-owned (dispatch) | never |
 | `--version`, `-h/--help` | n/a | n/a |
 
 Most-wanted promotions at the time of writing (cheap, content-knob shaped):
-`--negative-prompt`, `--video-format`, `--fflf-preflight` (as a "validate
-keyframes" button), and an `extra_arg` passthrough box in the form (the API
-already accepts it; the HTML form does not).
+`--negative-prompt`, `--fflf-preflight` (as a "validate keyframes" button), and
+an `extra_arg` passthrough box in the form (the API already accepts it; the HTML
+form does not). `--video-format` was promoted 2026-09-06 — but to a hosts.yaml
+preset rather than a form field, since a codec is a per-host/experiment choice,
+not a per-job knob.

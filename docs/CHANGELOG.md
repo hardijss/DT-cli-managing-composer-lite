@@ -4,6 +4,10 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
 
 ## [Unreleased] - 2026-09-06
 
+### Feature: `--video-format` as a hosts.yaml preset (default hevc, per-host override)
+
+- **`ltxq.py`**: new global `video_format` key (default `hevc`) with per-host override, resolved by `video_format_of()` and appended as `--video-format <v>` in both backends — `make_runner` (oneshot, at dispatch time where the host row is known, like `models_dir`) and `serve_args` (serve). Only emitted for video outputs (`mov`/`mp4`); an explicit empty string on a host omits the flag entirely; `hosts` table gained a `video_format` column (migration) synced from yaml via `COALESCE` (absent key keeps the stored value). ProRes + `.mp4` conflict is left to the engine's own error, documented in environment.md.
+
 ### Feature: `ltxq flags` engine-CLI drift check + CLI-mapping doc
 
 - **New `docs/cli-mapping.md`**: durable documentation of how UI/API settings reach the engine's `generate` command — the four channels (media slots, `--seed`/`--frames` overrides, config-JSON layering, `extra_arg` escape hatch), which flags ltxq owns outright, and the promotion policy for classifying new engine arguments (content knob → UI field; config-level → Config JSON; queue concern → hosts.yaml; else `extra_arg`). Includes a dated appendix inventorying every `generate --help` option vs. UI coverage as of 2026-09-06.

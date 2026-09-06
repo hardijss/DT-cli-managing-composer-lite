@@ -138,6 +138,7 @@ MIGRATIONS = ("ALTER TABLE jobs ADD COLUMN assets TEXT",
               "ALTER TABLE hosts ADD COLUMN conn_type TEXT DEFAULT 'ssh'",
               "ALTER TABLE hosts ADD COLUMN cli_path TEXT",
               "ALTER TABLE hosts ADD COLUMN mux INT DEFAULT 1",
+              "ALTER TABLE hosts ADD COLUMN video_format TEXT",
               "ALTER TABLE jobs ADD COLUMN chain TEXT",
               "ALTER TABLE jobs ADD COLUMN batch TEXT")
 
@@ -182,7 +183,8 @@ def conf():
     for k, v in dict(cli_path="~/tod-dt-cli", poll_secs=10, stall_secs=900,
                      remote_root="genwork", movies_dir="~/Movies/generations",
                      use_pty=True, keep_remote=False, download_missing=False,
-                     disable_preview=True, offline=False, hosts=[]).items():
+                     disable_preview=True, offline=False, video_format="hevc",
+                     hosts=[]).items():
         c.setdefault(k, v)
     return c
 
@@ -214,12 +216,13 @@ def sync_hosts(con):
         enabled = 0 if h.get("enabled") is False else 1
         con.execute("INSERT OR IGNORE INTO hosts(alias) VALUES(?)", (alias,))
         con.execute("UPDATE hosts SET max_jobs=?, models_dir=COALESCE(?, models_dir), "
-                    "dest=?, ssh_opts=?, mux=?, conn_type=?, cli_path=?, enabled=? WHERE alias=?",
+                    "dest=?, ssh_opts=?, mux=?, conn_type=?, cli_path=?, "
+                    "video_format=COALESCE(?, video_format), enabled=? WHERE alias=?",
                     (h.get("max_jobs", 1), h.get("models_dir"),
                      h.get("dest") or alias, json.dumps(h.get("ssh_opts", [])),
                      0 if h.get("mux") is False else 1,
                      h.get("conn_type", "ssh"), h.get("cli_path"),
-                     enabled, alias))
+                     h.get("video_format"), enabled, alias))
     if active_aliases:
         placeholders = ",".join("?" * len(active_aliases))
         con.execute(f"UPDATE hosts SET enabled=0 WHERE alias NOT IN ({placeholders})", active_aliases)
@@ -335,11 +338,14 @@ def resolve_extra(extra, rd=None):
         out.append(KFREF.sub(lambda m: (f"{rd}/{m.group(1)}" if rd else m.group(1)), t))
     return out
 
-def make_runner(model, cli_path, use_pty, assets, extra, c, ext, models_dir=None):
+def make_runner(model, cli_path, use_pty, assets, extra, c, ext, models_dir=None,
+                video_format=None):
     args = (f"--model {shlex.quote(dollar_home(model))} "
             f"--config-file config.json --output out.{ext} --prompt-file prompt.txt")
     if models_dir:
         args += f" --models-dir {shlex.quote(dollar_home(models_dir))}"
+    if video_format and ext in ("mov", "mp4"):   # image output: flag meaningless
+        args += f" --video-format {shlex.quote(video_format)}"
     if not c.get("download_missing"): args += " --no-download-missing"
     if c.get("disable_preview"):      args += " --disable-preview"
     if c.get("offline"):              args += " --offline"
@@ -372,6 +378,11 @@ def cli_of(c, h):
     if h is not None and h["cli_path"]:
         return h["cli_path"]
     return c["cli_path"]
+
+def video_format_of(c, h):
+    """--video-format preset: global hosts.yaml default, per-host override.
+    An explicit empty string on a host omits the flag entirely."""
+    return h["video_format"] if h["video_format"] is not None else c.get("video_format")
 
 def probe(con, c, alias):
     hrow = con.execute("SELECT cli_path FROM hosts WHERE alias=?", (alias,)).fetchone()
@@ -449,7 +460,7 @@ def launch(c, con, h, job):
     (Path(job["local_dir"]) / "runner.sh").write_text(make_runner(
         job["model"], cli_of(c, h), c["use_pty"], json.loads(job["assets"] or "[]"),
         json.loads(job["extra_args"] or "[]"), c, job["ext"] or "mov",
-        models_dir=h["models_dir"]))
+        models_dir=h["models_dir"], video_format=video_format_of(c, h)))
     names = ["runner.sh", "prompt.txt"]
     names.append("config.json" if (Path(job["local_dir"]) / "config.json").exists()
                  else "config.txt")
@@ -484,6 +495,8 @@ def serve_args(job, h, c):
             "--config-file", f"{rd}/config.json", "--prompt-file", f"{rd}/prompt.txt",
             "--output", f"{rd}/out.{job['ext'] or 'mov'}"]
     if h["models_dir"]: args += ["--models-dir", exp(h["models_dir"])]
+    vf = video_format_of(c, h)
+    if vf and (job["ext"] or "mov") in ("mov", "mp4"): args += ["--video-format", vf]
     if not c.get("download_missing"): args.append("--no-download-missing")
     if c.get("disable_preview"):      args.append("--disable-preview")
     if c.get("offline"):              args.append("--offline")
