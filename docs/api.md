@@ -1,6 +1,6 @@
 # HTTP API
 
-**API version: 1.3** (see [Versioning](#versioning) at the end).
+**API version: 1.4** (see [Versioning](#versioning) at the end).
 
 The dashboard, the native macOS app, and external job-composition tools are
 all clients of the same localhost API served by `ltxq.py ui` (Flask, in
@@ -100,6 +100,7 @@ Common form fields (all optional unless noted):
 | `batch` | optional batch label (see above) |
 | `host` | pin to a host alias; empty = any free host |
 | `seed` / `new_seed` | explicit seed, or generate a fresh random one |
+| `frames` | engine frame-count override, passed through as `--frames <n>` (overrides the config's `numFrames`); empty = config default |
 | `ext` | `mov` (default), `mp4`, `png` |
 | `backend` | `oneshot` or `serve`; empty = host default |
 | `chain` | `first_frame` or `image` — continue from the previous finished job (batch-scoped when `batch` is set) |
@@ -238,6 +239,10 @@ data: {"hosts": [{"alias": "ltx-a", "worker_alive": true, ...}]}
 - **1.2** — adds `GET /api/status` (diagnostics snapshot). No existing
   endpoint changed.
 - **1.3** — adds `POST /api/hosts/reload` (validate + apply hosts.yaml).
+  No existing endpoint changed.
+- **1.4** — adds the optional `frames` form field on `/api/add` and
+  `/api/regen/<jid>`: the engine's `--frames <n>` frame-count override
+  (the CLI `add`/`regen` commands gained a matching `--frames` flag).
   No existing endpoint changed.
 
 Changes are additive: new endpoints, new optional request fields, new

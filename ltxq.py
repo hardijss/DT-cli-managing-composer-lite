@@ -850,6 +850,9 @@ def _cmd_add(c, con, a):
         (random.randint(1, 2**31 - 1) if a.new_seed else None)
     if seed is not None:
         extra += ["--seed", str(seed)]; print("seed:", seed)
+    if a.frames is not None:
+        if a.frames < 1: sys.exit("--frames must be a positive integer")
+        extra += ["--frames", str(a.frames)]; print("frames:", a.frames)
     (d / "runner.sh").write_text(make_runner(a.model, host_cli, c["use_pty"],
                                              assets, extra, c, a.ext))
     con.execute("INSERT INTO jobs(id,created_at,name,parent_id,host,model,prompt,"
@@ -857,7 +860,8 @@ def _cmd_add(c, con, a):
                 "fps,ext,backend,chain,batch) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (jid, int(time.time()), name, a.parent, a.host, a.model, prompt,
                  cfg_text, "queued", str(d), int(time.time()), json.dumps(assets),
-                 json.dumps(extra), obj.get("numFrames"), obj.get("fps"),
+                 json.dumps(extra), a.frames if a.frames is not None
+                 else obj.get("numFrames"), obj.get("fps"),
                  a.ext, a.backend, a.chain, batch))
     con.commit(); print(jid)
 
@@ -868,6 +872,14 @@ def cmd_regen(a):
     finally:
         con.close()
 
+def _strip_flag_pair(toks, flag):
+    out, skip = [], False
+    for t in toks:
+        if skip: skip = False; continue
+        if t == flag: skip = True; continue
+        out.append(t)
+    return out
+
 def _cmd_regen(con, a):
     p = con.execute("SELECT * FROM jobs WHERE id=?", (a.id,)).fetchone()
     if not p: sys.exit("no such job")
@@ -876,16 +888,14 @@ def _cmd_regen(con, a):
     if not cfg.exists(): cfg = pd / "config.txt"
     extra = json.loads(p["extra_args"] or "[]")
     if a.seed is not None or a.new_seed:
-        out, skip = [], False
-        for t in extra:
-            if skip: skip = False; continue
-            if t == "--seed": skip = True; continue
-            out.append(t)
-        extra = out
+        extra = _strip_flag_pair(extra, "--seed")
+    if a.frames is not None:
+        extra = _strip_flag_pair(extra, "--frames")
     ns = argparse.Namespace(model=a.model or p["model"],
                             prompt_file=str(pd / "prompt.txt"), config_file=str(cfg),
                             config_json=a.config_json, host=a.host, name=a.name,
                             parent=p["id"], seed=a.seed, new_seed=a.new_seed,
+                            frames=a.frames,
                             ext=a.ext, backend=a.backend or p["backend"],
                             chain=p["chain"], batch=a.batch or p["batch"],
                             upload=[],
@@ -1207,6 +1217,9 @@ def main():
     g.add_argument("--config-json"); g.add_argument("--host")
     g.add_argument("--name"); g.add_argument("--parent", help=argparse.SUPPRESS)
     g.add_argument("--seed", type=int); g.add_argument("--new-seed", action="store_true")
+    g.add_argument("--frames", type=int,
+                   help="engine frame count, passed through as --frames <n> "
+                        "(overrides the config's numFrames)")
     g.add_argument("--ext", default="mov", choices=["mov", "mp4", "png"])
     g.add_argument("--backend", choices=["oneshot", "serve"])
     for f in ("--image", "--audio", "--first-frame", "--middle-frame",
@@ -1225,6 +1238,8 @@ def main():
     g.add_argument("--model"); g.add_argument("--config-json"); g.add_argument("--host")
     g.add_argument("--name"); g.add_argument("--seed", type=int)
     g.add_argument("--new-seed", action="store_true")
+    g.add_argument("--frames", type=int,
+                   help="engine frame count override (replaces the original --frames)")
     g.add_argument("--ext", default="mov", choices=["mov", "mp4", "png"])
     g.add_argument("--backend", choices=["oneshot", "serve"])
     g.add_argument("--batch", help="override the group label (default: keep the original)")

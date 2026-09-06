@@ -4,6 +4,13 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
 
 ## [Unreleased] - 2026-09-06
 
+### Feature: expose the engine's `--frames <n>` next to seed
+
+- **`ltxq.py`**: new `--frames <n>` argument on `add` and `regen` — appended verbatim to the engine CLI (overriding the config's `numFrames`), like `--seed`; `regen` strips a previous `--frames` pair before applying the new value (`_strip_flag_pair` helper); the jobs-table `num_frames` metadata (drives the duration display) now prefers the explicit override.
+- **`server.py`**: `/api/add` and `/api/regen/<jid>` accept an optional `frames` form field and forward it to `cmd_add`/`cmd_regen` (API 1.4, additive).
+- **`static/index.html`**: "Frames" number input next to Seed in the New-job form (empty = config default); the history Load button round-trips a previous job's `--frames` override from its extra args so Load + Add keeps the same frame count.
+- **`docs/api.md`**: documented the `frames` field and bumped the API version to 1.4; **`docs/features.md`**: add-form bullet updated.
+
 ### Docs: expansion ideas — LLM prompt synthesis for keyframe pairs
 
 - **`docs/expansion-of-this-idea.md`**: Idea 2 gained a "Prompt sources" section covering the complexity jump from one shared prompt to per-pair LLM synthesis — three sources (shared string / prompt list file / LLM-synthesized), and a detailed local-LLM helper stage (single OpenAI-compatible client covering both Ollama `:11434` and LM Studio `:1234`, user-editable instruction template, previous-pair context carry, two-phase synthesize→review→queue via a pairs manifest, caching by still-hash+template-hash+model, per-pair fallback degradation). New open questions added; backlog Idea 5 cross-referenced as the scripted cousin of the prompt factory. Docs-only change; no code touched.

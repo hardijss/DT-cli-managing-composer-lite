@@ -132,6 +132,10 @@ a { color:var(--acc); text-decoration:none; }
         <div class="row"><input id="seed" type="number" style="width:120px">
         <label style="margin:0"><input type="checkbox" id="new_seed"> new seed</label></div>
       </div>
+      <div><label>Frames (--frames; empty = config numFrames)</label>
+        <input id="frames" type="number" min="1" step="1" style="width:120px"
+               placeholder="config default">
+      </div>
     </div>
     <div class="grid">
       <div><label>Image (--image)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="image"><input type="file" id="image" accept="image/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="image" title="clear selected file" hidden>✕</button></div></div>
@@ -431,6 +435,12 @@ function render(d) {
         $("config_json").value = JSON.stringify(cfg, null, 2);
         $("name").value = j.name || "";
         $("batch").value = j.batch || "";
+        // a previous --frames override is a content parameter: round-trip it
+        // so Load + Add keeps the same frame count (unlike seed, which resets)
+        const toks = (() => { try { return JSON.parse(j.extra_args || "[]"); }
+                              catch (e) { return []; } })();
+        const fi = toks.indexOf("--frames");
+        $("frames").value = (fi >= 0 && toks[fi + 1]) ? toks[fi + 1] : "";
         const sel = [...$("model").options].find(o => o.value === j.model);
         if (sel) $("model").value = j.model;
         if (j.backend) $("backend").value = j.backend;
@@ -715,6 +725,7 @@ $("addform").onsubmit = async ev => {
   if ($("batch").value) fd.set("batch", $("batch").value);
   if ($("seed").value)  fd.set("seed", $("seed").value);
   if ($("new_seed").checked) fd.set("new_seed", "1");
+  if ($("frames").value) fd.set("frames", $("frames").value);
   if ($("chain").checked) {
     fd.set("chain", $("chain_slot").value);
     localStorage.setItem("ltxq.chain_slot", $("chain_slot").value);

@@ -40,7 +40,8 @@
 - Dashboard: active/queued cards (bar, elapsed, phase, note, log tail),
   cancel
 - Add form: per-host model dropdown, prompt, config JSON overlay, seed /
-  new-seed, backend/host/ext, image & input-video uploads
+  new-seed, frames (`--frames` override), backend/host/ext, image &
+  input-video uploads
 - LTX keyframes: first/middle/last-frame slots, repeated keyframes with
   `index[:strength[:attention]]`, default strengths
 - ffmpeg frame extraction: pick a finished video + frame #/first/last →

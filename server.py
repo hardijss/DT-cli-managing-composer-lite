@@ -585,6 +585,7 @@ def api_add():
         config_file=config_file, config_json=f.get("config_json") or None,
         host=f.get("host") or None, name=f.get("name") or None,
         parent=None, seed=int(f["seed"]) if f.get("seed") else None,
+        frames=int(f["frames"]) if f.get("frames") else None,
         new_seed=bool(f.get("new_seed")), ext=f.get("ext") or "mov",
         backend=f.get("backend") or None, chain=chain,
         batch=(f.get("batch") or "").strip() or None,
@@ -839,6 +840,7 @@ def api_regen(jid):
         config_json=f.get("config_json") or None, host=f.get("host") or None,
         name=f.get("name") or None,
         seed=int(f["seed"]) if f.get("seed") else None,
+        frames=int(f["frames"]) if f.get("frames") else None,
         new_seed=bool(f.get("new_seed")), ext=f.get("ext") or "mov",
         backend=f.get("backend") or None, batch=f.get("batch") or None)
     out, err = _capture(ltxq.cmd_regen, ns)
