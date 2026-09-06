@@ -2,7 +2,21 @@
 
 All notable changes, bug fixes, and feature additions to `ltxq` are documented here.
 
+## [Unreleased] - 2026-09-06
+
+### Docs: expansion ideas — LLM prompt synthesis for keyframe pairs
+
+- **`docs/expansion-of-this-idea.md`**: Idea 2 gained a "Prompt sources" section covering the complexity jump from one shared prompt to per-pair LLM synthesis — three sources (shared string / prompt list file / LLM-synthesized), and a detailed local-LLM helper stage (single OpenAI-compatible client covering both Ollama `:11434` and LM Studio `:1234`, user-editable instruction template, previous-pair context carry, two-phase synthesize→review→queue via a pairs manifest, caching by still-hash+template-hash+model, per-pair fallback degradation). New open questions added; backlog Idea 5 cross-referenced as the scripted cousin of the prompt factory. Docs-only change; no code touched.
+
+### Docs: expansion ideas — keyframe-pair batch
+
+- **`docs/expansion-of-this-idea.md`** gained Idea 2 in full — keyframe-pair batch composition from a folder of zero-padded stills (a new `add-pairs` that queues one job per consecutive still pair with `first_frame`/`last_frame` slots; N stills → N−1 jobs, parallel-dispatchable unlike the serial ⛓ chain feature, with shared-still seams for concat), including open design decisions (pairs vs `middle_frame` triplets, ordering rules, resolution guard) and the shared reassembly companion. Backlog one-liners renumbered accordingly (built-in segmenter → Idea 3, batch reassembly → Idea 4, per-segment prompts → Idea 5). Docs-only change; no code touched.
+
 ## [Unreleased] - 2026-09-05
+
+### Docs: new expansion-ideas scratchpad
+
+- **New `docs/expansion-of-this-idea.md`**, linked from `docs/README.md`: a scratchpad for future-direction ideas. Seeds Idea 1 in full — manifest-driven audio-segment batch composition (a new `add-batch` that reads an audio-segment manifest and queues one job per segment with per-segment `numFrames` + `--audio` conditioning), including input contract, open design decisions (Non-8n+1 rounding policy, seed policy, fps guard) and a batch-reassembly companion; plus a short candidate backlog (built-in segmenter, batch reassembly/replace, per-segment prompts). Docs-only change; no code touched.
 
 ### Docs: state-on-disk cleanup + uninstall guide
 
