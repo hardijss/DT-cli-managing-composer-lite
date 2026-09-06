@@ -123,6 +123,9 @@ CREATE TABLE IF NOT EXISTS hosts(
 CREATE TABLE IF NOT EXISTS registry(
   host TEXT, model TEXT, name TEXT, source TEXT, downloaded INT, hf TEXT, seen_at INT,
   PRIMARY KEY(host, model));
+CREATE TABLE IF NOT EXISTS merge_items(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, pos INT NOT NULL,
+  jid TEXT NOT NULL, added_at INT);
 """
 MIGRATIONS = ("ALTER TABLE jobs ADD COLUMN assets TEXT",
               "ALTER TABLE jobs ADD COLUMN extra_args TEXT",

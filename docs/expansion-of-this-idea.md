@@ -244,6 +244,87 @@ form of backlog Idea 5.
 
 ---
 
+## Idea 6 — Interactive merge playlist (manual output merging, local ffmpeg)
+
+**Status: Done (v1)** — shipped as the dashboard's "Merge tray" (one implicit
+playlist, per-entry ✕ remove and ↑/↓ reorder, "Merge…" with a name prompt),
+backed by `merge_items` in the db, the `/api/merge/*` endpoints (API 1.5),
+and a background ffmpeg stream-copy worker writing to
+`movies_dir/merges/`. The open questions resolved as: single tray (no named
+playlists yet), duplicates allowed, re-encode fallback refused with a clear
+message (v1 merges only identical streams). Not implemented: the one-click
+"merge whole batch" shortcut (Idea 4 territory).
+
+### The scenario
+
+Finished jobs are collected into `movies_dir/<slug>-<id>/`, but each job is
+one clip. The user wants to stitch several of them into a single file, in an
+order they pick by hand, on demand — without touching the engine or any
+remote host. With ffmpeg present locally this is pure client-of-oneself work:
+select job A0001 in the dashboard, hit "add to merge", keep collecting clips
+into a playlist, then press "Merge" and get one file.
+
+This is the **manual** sibling of Idea 4 (auto-concat on batch completion):
+same concat pass, but user-triggered and user-ordered instead of firing
+automatically. Both should share one `concat_videos(inputs, out)` helper.
+
+### Why it's cheap here
+
+Every output comes from the same engine with the same per-host
+`--video-format` preset (hevc today), so the common case is a **stream-copy
+concat**: `-f concat -safe 0 -i list.txt -c copy out.mp4` — seconds, no
+re-encode, no quality loss. ffprobe each input first; on mismatch
+(codec/resolution/fps/pix_fmt/container), surface a clear warning and either
+refuse or offer a re-encode fallback (which does cost CPU — opt-in).
+
+### Interface sketch
+
+- **Data model** — two small tables: `playlists(id, name, created_at)` and
+  `playlist_items(playlist_id, position, jid)`. Jobs are referenced by id;
+  the actual video path is resolved from `movies_dir`/`metadata.json` at
+  merge time so deleted/moved artifacts are caught up front (validate on
+  merge, gray out missing items in the UI).
+- **API** (Flask, alongside existing routes):
+  - `POST /api/playlist` {name?} — create (or return the implicit tray)
+  - `POST /api/playlist/<id>/add` {jid} — only `done` jobs with an existing video
+  - `POST /api/playlist/<id>/remove` {position} / `POST …/reorder` [positions]
+  - `POST /api/playlist/<id>/merge` {name} — spawn ffmpeg, return merge id;
+    progress parsed from `time=` on stderr and published over the existing
+    SSE bus (`/api/events`), reusing the job-event pattern
+  - `GET /api/merge/<id>/download`
+- **UI** — a "➕ merge" button on every `done` job card; a collapsible merge
+  tray (cart metaphor) listing the ordered clips with up/down/remove; a
+  "Merge…" button that asks for an output name and shows a progress bar with
+  a download link when done. Batch bonus: a one-click "merge whole batch"
+  that auto-fills the tray from the existing `batch` label, ordered by
+  chain/creation order — the manual cousin of Idea 4's hook.
+- **Save location** — a browser can't pick an arbitrary path, so: write to
+  `movies_dir/merges/<name>.mp4` and offer a download link (browser decides
+  where it lands). A free-text path field is possible later but is OS-dependent.
+
+### Concurrency
+
+Yes, it can run while the queue is going. The merge is a local subprocess
+spawned by the Flask server process; it never touches `engine.lock`, the
+dispatch loop, or remote hosts. DB touches are the same short WAL-mode
+transactions web `add` already races with the engine today. Stream-copy
+concat is I/O-light, so it doesn't meaningfully compete with rsync
+collection; only the re-encode fallback would contend for CPU.
+
+### Edge cases & open questions
+
+- Missing artifact (video collected then deleted) → validate before merge,
+  disable the button with a reason.
+- Same job added twice → allow (dedupe on add? decide).
+- Mixing containers (`mov` vs `mp4`) / formats across jobs → ffprobe gate.
+- Concurrent merges → serialize behind a simple lock or allow parallel with
+  distinct outputs (concat is read-only on inputs, so parallel is safe).
+- One implicit tray vs multiple named playlists? Start with one tray,
+  promote to named playlists if it earns it.
+- Re-encode fallback: ship at all, or refuse mismatches in v1?
+
+---
+
 ## Candidate backlog (one-liners, to be expanded when picked up)
 
 - **Idea 3 — Built-in segmenter**: the producer side of Idea 1 — ffprobe/ffmpeg
@@ -251,7 +332,7 @@ form of backlog Idea 5.
   writer, so ltxq owns the whole path from mp3 to queued batch.
 - **Idea 4 — Batch reassembly & replace**: formalize the concat pass (shared
   companion of Ideas 1 and 2) + a per-segment regen-and-replace flow (regen
-  segment k only, re-concat).
+  segment k only, re-concat). Shares the concat helper with Idea 6.
 - **Idea 5 — Per-segment prompt scripting**: derive per-segment prompts from
   timing/lyrics/section data instead of one shared prompt (the scripted,
   non-LLM cousin of Idea 2's prompt factory).

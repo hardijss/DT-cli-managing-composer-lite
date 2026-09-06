@@ -82,7 +82,7 @@ All persistent state lives inside the repo checkout (next to `ltxq.py` —
 | `.ssh_mux/` | ControlMaster socket dir for ssh muxing | yes, while no job is running |
 | `jobs/<id>/` | per-job input copies (prompt, config, assets, runner.sh, `.req`) | yes — but deleting the db **doesn't** delete these, and vice versa |
 | `jobs/_tmp/` | staging uploads / extracted frames; auto-pruned after 24 h | auto-managed |
-| `~/Movies/generations/` (or your `movies_dir`) | collected outputs with `metadata.json` | your rendered videos — keep or delete at will |
+| `~/Movies/generations/` (or your `movies_dir`) | collected outputs with `metadata.json`; manual `merges/` subfolder (ffmpeg-concat tray outputs) | your rendered videos — keep or delete at will |
 
 On each **render host**: `~/genwork/` (worker dir + job dirs) is scratch
 space, recreated as needed; your model files and `tod-dt-cli` live elsewhere

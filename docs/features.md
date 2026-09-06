@@ -66,6 +66,14 @@
 - Per-host queue pause: ⏸ Pause / ▶ Resume buttons, optional timed release
   (formats like `22:00`, `+2h`, or `2026-09-02 22:00`) with a live countdown
   banner; pauses dispatch only — in-flight jobs keep running
+- Merge tray: one ordered playlist of finished jobs' collected videos — ➕ on
+  done history rows appends, ↑/↓ reorders, ✕ removes, Clear empties; "Merge…"
+  concatenates locally with ffmpeg (stream-copy, `-f concat -c copy`) into
+  `movies_dir/merges/<name>.<ext>` with a live progress bar and a download
+  link. Inputs are ffprobe-validated first (all clips must share codec /
+  resolution / fps — no re-encode fallback in v1); missing artifacts disable
+  the button. Runs as a local subprocess in the server process — safe to use
+  while the queue renders
 
 ### CLI
 - `add/ls/run/cancel/regen/check/probe/models/stage/reconcile/

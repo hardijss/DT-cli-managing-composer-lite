@@ -1,6 +1,6 @@
 # HTTP API
 
-**API version: 1.4** (see [Versioning](#versioning) at the end).
+**API version: 1.5** (see [Versioning](#versioning) at the end).
 
 The dashboard, the native macOS app, and external job-composition tools are
 all clients of the same localhost API served by `ltxq.py ui` (Flask, in
@@ -37,6 +37,10 @@ The polling endpoint (dashboard polls every 2s).
              "release_at": null, "conn": "ssh|local",
              "worker_alive": true, "in_flight": 0, "queued": 0,
              "cli_path": "..."} ],
+ "merge": [ {"pos": 1, "jid": "a1b2c3d4e5", "name": "008",
+             "gone": false, "video": "/path/to/out.mov"} ],   // merge tray, ordered
+ "merge_run": {"running": false, "name": null, "out": null, "pct": 0,
+               "error": null, "finished_at": null, "results": [...]},
  "engine": true,                  // engine loop running
  "now": 1757050000}
 ```
@@ -145,6 +149,33 @@ job's batch.
 Staged files are attached to a new job by sending `staged_<slot>` (or
 `staged_upload`) form fields on `/api/add`.
 
+## Merge tray *(since API 1.5)*
+
+One implicit ordered playlist of finished jobs' collected videos, merged
+locally with ffmpeg (stream-copy concat) on demand. All state is also
+embedded in `GET /api/state` as `merge` (ordered items; `video` is null when
+the collected file is missing, `gone` true when the job row was deleted) and
+`merge_run` (current/last merge: `running`, `name`, `out`, `pct`, `error`,
+`results` — the last five completed merges). Tray contents persist in the
+`merge_items` db table. Every mutation publishes a `merge` SSE event.
+
+- `POST /api/merge/add` (JSON `{"jid": "..."}`) — append a done job's video;
+  refuses non-done jobs or missing video files
+- `POST /api/merge/remove` (JSON `{"pos": 1}`) — delete an entry (remaining
+  positions renumber)
+- `POST /api/merge/move` (JSON `{"pos": 1, "dir": "up"|"down"}`) — swap with
+  the neighbor; refuses moving past the ends
+- `POST /api/merge/clear` — empty the tray
+- `POST /api/merge/run` (JSON `{"name": "my-montage"}`) — start a merge:
+  ffprobe-validates every clip (all must share codec/resolution/fps — there
+  is no re-encode fallback), then concatenates with `-f concat -c copy` into
+  `movies_dir/merges/<name>.<ext>` (extension follows the first clip;
+  a numeric suffix avoids overwriting). Runs in a background thread —
+  progress via `merge_run` in `/api/state` or the `merge` SSE event.
+  → `{"ok": true, "name": "<output filename>"}`
+- `GET /api/merge/file/<name>` — download a merge output (name is flattened
+  to a basename; outputs live only under `movies_dir/merges/`)
+
 ## Hosts
 
 - `GET /api/models/<alias>` → `{"models": [{"model", "name", "downloaded"}],
@@ -244,6 +275,9 @@ data: {"hosts": [{"alias": "ltx-a", "worker_alive": true, ...}]}
   `/api/regen/<jid>`: the engine's `--frames <n>` frame-count override
   (the CLI `add`/`regen` commands gained a matching `--frames` flag).
   No existing endpoint changed.
+- **1.5** — adds the merge tray (`/api/merge/*`, `GET /api/merge/file/<name>`)
+  and the `merge`/`merge_run` fields on `/api/state` plus a `merge` SSE
+  event. No existing endpoint changed.
 
 Changes are additive: new endpoints, new optional request fields, new
 response fields. Breaking changes would bump the major version and be

@@ -200,6 +200,17 @@ a { color:var(--acc); text-decoration:none; }
     <th>pct</th><th>elapsed</th><th>note</th><th></th></tr></thead>
     <tbody id="hist"></tbody></table>
   </div>
+
+  <h2>Merge tray <span class="sub">(ffmpeg concat — local, lossless, safe while the queue runs)</span></h2>
+  <div class="card">
+    <div id="tray"></div>
+    <div class="bar" id="mergebar" style="display:none"><div></div></div>
+    <div class="row" style="margin-top:10px">
+      <button type="button" id="mergeRun" disabled>Merge…</button>
+      <button type="button" class="sec" id="mergeClear" disabled>Clear</button>
+      <span class="sub" id="mergemsg"></span>
+    </div>
+  </div>
 </main>
 <div id="overlay">
   <div id="statusbox">
@@ -423,6 +434,7 @@ function render(d) {
       <td class="note">${esc((j.note||"") + (j.local_out ? " · " + j.local_out : ""))}</td>
       <td><a href="/api/view/${esc(j.id)}" target="_blank">View</a>
           <button class="sec" data-load="${esc(j.id)}">Load</button>
+          ${j.status === "done" && j.local_out ? `<button class="sec" data-madd="${esc(j.id)}" title="add this job's collected video to the merge tray">➕</button>` : ""}
           ${ATTACH_MEDIA ? `<button class="sec" data-attach="${esc(j.id)}" title="attach this job's input files (image / first / middle / last frame, audio, keyframes) on top of the current form — a slot already staged is replaced, the rest is kept">+ media</button>` : ""}
           <button class="danger" data-del="${esc(j.id)}">✕</button></td>
     </tr>`; }).join("");
@@ -476,12 +488,55 @@ function render(d) {
             flash("deleted"); refresh(); }
       catch (e) { flash(e.message, true); }
     });
+  document.querySelectorAll("[data-madd]").forEach(b =>
+    b.onclick = async () => {
+      try { await api("/api/merge/add", {method:"POST",
+              headers:{"Content-Type":"application/json"},
+              body: JSON.stringify({jid: b.dataset.madd})});
+            flash("added to merge tray"); refresh(); }
+      catch (e) { flash(e.message, true); }
+    });
   const vids = d.jobs.filter(j => j.status === "done" && j.local_out);
   const cur = $("srcjob").value;
   $("srcjob").innerHTML = vids.map(j =>
     `<option value="${esc(j.id)}">${esc(j.name)} (${esc(j.id)})</option>`).join("")
     || '<option value="">no finished videos yet</option>';
   if (cur && vids.some(j => j.id === cur)) $("srcjob").value = cur;
+
+  renderTray(d);
+}
+
+function renderTray(d) {
+  const tray = d.merge || [], run = d.merge_run || {};
+  const anyMissing = tray.some(it => it.gone || !it.video);
+  $("tray").innerHTML = tray.length ? tray.map((it, i) =>
+    `<div class="row" style="margin:3px 0">
+      <span class="badge">${i + 1}</span>
+      <span class="grow">${it.gone ? '<span class="sub">(deleted job)</span> ' : ""}${esc(it.name || it.jid)}
+        <span class="mono sub">${esc(it.jid)}</span>
+        ${it.gone || !it.video ? ' <span class="badge failed">video missing</span>' : ""}</span>
+      <button class="sec" data-mup="${it.pos}" ${i === 0 ? "disabled" : ""} title="move up">↑</button>
+      <button class="sec" data-mdown="${it.pos}" ${i === tray.length - 1 ? "disabled" : ""} title="move down">↓</button>
+      <button class="sec" data-mrm="${it.pos}" title="remove from tray">✕</button>
+    </div>`).join("")
+    : '<div class="sub">empty — add finished jobs with the ➕ button in History</div>';
+  document.querySelectorAll("[data-mup]").forEach(b =>
+    b.onclick = () => mergeMove(+b.dataset.mup, "up"));
+  document.querySelectorAll("[data-mdown]").forEach(b =>
+    b.onclick = () => mergeMove(+b.dataset.mdown, "down"));
+  document.querySelectorAll("[data-mrm]").forEach(b =>
+    b.onclick = () => mergeMove(+b.dataset.mrm, "rm"));
+  const busy = !!run.running;
+  $("mergeRun").disabled = busy || !tray.length || anyMissing;
+  $("mergeRun").textContent = busy ? "Merging…" : "Merge…";
+  $("mergeClear").disabled = busy || !tray.length;
+  $("mergebar").style.display = busy ? "block" : "none";
+  if (busy) $("mergebar").firstElementChild.style.width = (run.pct || 0) + "%";
+  const last = (run.results || [])[0];
+  $("mergemsg").innerHTML =
+    (run.error ? `<span class="st-bad">${esc(run.error)}</span> ` : "") +
+    (last ? `last merge: <a href="/api/merge/file/${encodeURIComponent(last.name)}" download>${esc(last.name)}</a>
+      <span class="mono sub">· ${esc(last.path)} · ${fmtBytes(last.bytes)}</span>` : "");
 }
 
 const staged = [];   // {slot, name}
@@ -673,6 +728,28 @@ $("extract").onclick = async () => {
                  name: r.staged});
     renderStaged();
     flash(`extracted frame ${r.frame} → attached as ${$("slot").value}`);
+  } catch (e) { flash(e.message, true); }
+};
+
+// ---- merge tray actions ----
+async function mergePost(path, body) {
+  try { await api(path, {method:"POST", headers:{"Content-Type":"application/json"},
+                         body: JSON.stringify(body)});
+        refresh(); }
+  catch (e) { flash(e.message, true); }
+}
+const mergeMove = (pos, dir) =>
+  mergePost(dir === "rm" ? "/api/merge/remove" : "/api/merge/move",
+            dir === "rm" ? {pos} : {pos, dir});
+$("mergeClear").onclick = () => mergePost("/api/merge/clear", {});
+$("mergeRun").onclick = async () => {
+  const nm = prompt("Name for the merged file (saved in movies_dir/merges):");
+  if (!nm || !nm.trim()) return;
+  try {
+    const r = await api("/api/merge/run", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({name: nm.trim()})});
+    flash("merging into " + r.name);
   } catch (e) { flash(e.message, true); }
 };
 

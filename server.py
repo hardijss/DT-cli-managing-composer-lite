@@ -2,7 +2,7 @@
 
 Run: ./venv/bin/python ltxq.py ui [--port 8765] [--no-engine]
 """
-import argparse, contextlib, gc, io, json, re, shlex, subprocess, sys, threading, time
+import argparse, contextlib, gc, io, json, re, shlex, subprocess, sys, tempfile, threading, time
 from collections import deque
 from pathlib import Path
 from urllib.parse import urlparse
@@ -383,6 +383,7 @@ def state_dict():
         jobs = [jrow(j) for j in con.execute(
             "SELECT * FROM jobs ORDER BY created_at DESC LIMIT 50")]
         return {"jobs": jobs, "hosts": _hosts_view(con),
+                "merge": merge_view(con), "merge_run": dict(MERGE_RUN),
                 "engine": STATE["engine"], "now": int(time.time())}
 
 
@@ -873,6 +874,225 @@ def api_job(jid):
         if not j:
             return flask.jsonify(error="no such job"), 404
         return flask.jsonify(job=jrow(j))
+
+
+# --------------------------------------------------------------- merge tray
+# One implicit ordered playlist of finished jobs' collected videos ("merge
+# tray"), concatenated locally with ffmpeg on demand. Stream-copy concat only
+# (all outputs share the engine's per-host video-format preset, so the common
+# case is lossless and seconds-fast); a local subprocess that never touches
+# the engine loop, engine.lock, or any remote host — safe to run mid-queue.
+
+MERGE_RUN = {"running": False, "name": None, "out": None, "pct": 0,
+             "error": None, "finished_at": None, "results": []}
+_MERGE_LOCK = threading.Lock()        # serializes run attempts
+
+# v1 policy: refuse clips whose elementary streams differ instead of
+# re-encoding (re-encode is CPU-heavy and would fight the queue).
+def _merge_probe(path):
+    """(duration_s, stream signature) of a video via ffprobe."""
+    r = subprocess.run([ltxq.ff_tool("ffprobe"), "-v", "error",
+                        "-select_streams", "v:0", "-show_entries",
+                        "stream=codec_name,width,height,r_frame_rate:"
+                        "format=duration", "-of", "json", str(path)],
+                       capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        raise RuntimeError("ffprobe failed: " + (r.stderr or "").strip()[-200:])
+    d = json.loads(r.stdout or "{}")
+    st = (d.get("streams") or [{}])[0]
+    sig = (st.get("codec_name"), st.get("width"), st.get("height"),
+           st.get("r_frame_rate"))
+    return float((d.get("format") or {}).get("duration") or 0), sig
+
+
+def merge_view(con):
+    """Tray rows resolved against the jobs table (deleted jobs / missing
+    video files are flagged, not silently dropped — the UI offers removal)."""
+    out = []
+    for it in con.execute("SELECT pos, jid FROM merge_items ORDER BY pos"):
+        j = con.execute("SELECT * FROM jobs WHERE id=?",
+                        (it["jid"],)).fetchone()
+        v = ltxq.video_of(j) if j and j["status"] == "done" else None
+        out.append({"pos": it["pos"], "jid": it["jid"],
+                    "name": j["name"] if j else None,
+                    "gone": j is None, "video": v})
+    return out
+
+
+def _merge_publish():
+    with contextlib.closing(ltxq.db()) as con:
+        EVENTS.publish("merge", {"merge": merge_view(con),
+                                 "merge_run": dict(MERGE_RUN)})
+
+
+def _merge_renumber(con):
+    for i, row in enumerate(con.execute(
+            "SELECT id FROM merge_items ORDER BY pos"), 1):
+        con.execute("UPDATE merge_items SET pos=? WHERE id=?", (i, row["id"]))
+
+
+@app.post("/api/merge/add")
+def api_merge_add():
+    d = flask.request.get_json(force=True, silent=True) or {}
+    jid = d.get("jid", "")
+    if not jid_ok(jid):
+        return flask.jsonify(error="no such job"), 404
+    with contextlib.closing(ltxq.db()) as con:
+        j = con.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
+        if not j or j["status"] != "done":
+            return flask.jsonify(error="job is not done / not found"), 400
+        if not ltxq.video_of(j):
+            return flask.jsonify(error="no video file found in output dir"), 400
+        n = con.execute("SELECT COUNT(*) FROM merge_items").fetchone()[0]
+        con.execute("INSERT INTO merge_items(pos, jid, added_at) VALUES(?,?,?)",
+                    (n + 1, jid, int(time.time())))
+        con.commit()
+        view = merge_view(con)
+    _merge_publish()
+    return flask.jsonify(ok=True, merge=view)
+
+
+@app.post("/api/merge/remove")
+def api_merge_remove():
+    d = flask.request.get_json(force=True, silent=True) or {}
+    with contextlib.closing(ltxq.db()) as con:
+        cur = con.execute("DELETE FROM merge_items WHERE pos=?",
+                          (int(d.get("pos") or 0),))
+        _merge_renumber(con)
+        con.commit()
+        view = merge_view(con)
+    if not cur.rowcount:
+        return flask.jsonify(error="no such tray position"), 404
+    _merge_publish()
+    return flask.jsonify(ok=True, merge=view)
+
+
+@app.post("/api/merge/move")
+def api_merge_move():
+    d = flask.request.get_json(force=True, silent=True) or {}
+    pos, direction = int(d.get("pos") or 0), d.get("dir")
+    if direction not in ("up", "down"):
+        return flask.jsonify(error="dir must be 'up' or 'down'"), 400
+    with contextlib.closing(ltxq.db()) as con:
+        row = con.execute("SELECT id, pos FROM merge_items WHERE pos=?",
+                          (pos,)).fetchone()
+        other = con.execute("SELECT id, pos FROM merge_items WHERE pos=?",
+                            (pos - 1 if direction == "up" else pos + 1,)).fetchone()
+        if not row or not other:
+            return flask.jsonify(error="cannot move further"), 400
+        con.execute("UPDATE merge_items SET pos=? WHERE id=?",
+                    (other["pos"], row["id"]))
+        con.execute("UPDATE merge_items SET pos=? WHERE id=?",
+                    (row["pos"], other["id"]))
+        con.commit()
+        view = merge_view(con)
+    _merge_publish()
+    return flask.jsonify(ok=True, merge=view)
+
+
+@app.post("/api/merge/clear")
+def api_merge_clear():
+    with contextlib.closing(ltxq.db()) as con:
+        con.execute("DELETE FROM merge_items"); con.commit()
+        view = merge_view(con)
+    _merge_publish()
+    return flask.jsonify(ok=True, merge=view)
+
+
+def _merge_worker(paths, total_s, out_path):
+    ffmpeg = ltxq.ff_tool("ffmpeg")
+    lst = STAGE / f"merge_{int(time.time()*1000)}.txt"
+    STAGE.mkdir(parents=True, exist_ok=True)
+    lst.write_text("".join(
+        "file '" + p.replace("'", "'\\''") + "'\n" for p in paths))
+    try:
+        with tempfile.TemporaryFile(mode="w+") as errf:
+            proc = subprocess.Popen(
+                [ffmpeg, "-hide_banner", "-nostats", "-loglevel", "error",
+                 "-progress", "pipe:1", "-f", "concat", "-safe", "0",
+                 "-i", str(lst), "-c", "copy", "-movflags", "+faststart",
+                 "-y", str(out_path)],
+                stdout=subprocess.PIPE, stderr=errf, text=True)
+            for line in proc.stdout:
+                k, _, v = line.strip().partition("=")
+                if k in ("out_time_us", "out_time_ms") and total_s > 0:
+                    try:                          # both fields are microseconds
+                        MERGE_RUN["pct"] = min(99, int(int(v) / 1e6 / total_s * 100))
+                    except ValueError:
+                        pass
+            proc.wait()
+            if proc.returncode == 0:
+                MERGE_RUN.update(running=False, out=str(out_path), finished_at=int(time.time()))
+                MERGE_RUN["results"].insert(0, {
+                    "name": out_path.name, "path": str(out_path),
+                    "bytes": out_path.stat().st_size,
+                    "finished_at": MERGE_RUN["finished_at"]})
+                del MERGE_RUN["results"][5:]
+                print(f"[merge] wrote {out_path}")
+            else:
+                errf.seek(0)
+                MERGE_RUN.update(running=False, finished_at=int(time.time()),
+                                 error="ffmpeg failed: "
+                                       + (errf.read() or "").strip()[-300:])
+                print(f"[merge] FAILED: {MERGE_RUN['error']}")
+    except Exception as e:
+        MERGE_RUN.update(running=False, finished_at=int(time.time()),
+                         error=f"{type(e).__name__}: {e}")
+        print("[merge] error:", repr(e))
+    finally:
+        lst.unlink(missing_ok=True)
+    with contextlib.closing(ltxq.db()) as con:
+        _merge_publish()
+
+
+@app.post("/api/merge/run")
+def api_merge_run():
+    d = flask.request.get_json(force=True, silent=True) or {}
+    with _MERGE_LOCK:
+        if MERGE_RUN["running"]:
+            return flask.jsonify(error="a merge is already running"), 400
+        with contextlib.closing(ltxq.db()) as con:
+            view = merge_view(con)
+        if not view:
+            return flask.jsonify(error="merge tray is empty"), 400
+        missing = [r for r in view if not r["video"]]
+        if missing:
+            return flask.jsonify(
+                error="remove the missing entries first ("
+                      + ", ".join(r["jid"] for r in missing) + ")"), 400
+        paths = [r["video"] for r in view]
+        try:
+            durs, sigs = zip(*(_merge_probe(p) for p in paths))
+        except (RuntimeError, OSError, ValueError) as e:
+            return flask.jsonify(error=str(e)), 400
+        for i, sig in enumerate(sigs[1:], 2):
+            if sig != sigs[0]:
+                return flask.jsonify(
+                    error=f"clip {i} differs from clip 1 "
+                          f"(codec/size/fps {sig} vs {sigs[0]}) — merging needs "
+                          "identical streams (v1 has no re-encode fallback)"), 400
+        name = ltxq.slug(d.get("name") or "") or f"merge-{int(time.time())}"
+        out_dir = Path(ltxq.conf()["movies_dir"]).expanduser() / "merges"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / f"{name}{Path(paths[0]).suffix or '.mp4'}"
+        for i in range(2, 100):                   # never overwrite a prior merge
+            if not out.exists():
+                break
+            out = out_dir / f"{name}-{i}{Path(paths[0]).suffix or '.mp4'}"
+        MERGE_RUN.update(running=True, name=out.name, out=None, pct=0,
+                         error=None, finished_at=None)
+        threading.Thread(target=_merge_worker,
+                         args=(paths, sum(durs), out), daemon=True).start()
+    return flask.jsonify(ok=True, name=out.name)
+
+
+@app.get("/api/merge/file/<name>")
+def api_merge_file(name):
+    d = Path(ltxq.conf()["movies_dir"]).expanduser() / "merges"
+    p = d / Path(name).name
+    if not p.is_file():
+        return "no such merge output", 404
+    return flask.send_file(p)
 
 
 def run_ui(a):

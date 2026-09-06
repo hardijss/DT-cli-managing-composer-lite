@@ -4,6 +4,13 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
 
 ## [Unreleased] - 2026-09-06
 
+### Feature: merge tray — merge finished job videos locally with ffmpeg (API 1.5)
+
+- **`ltxq.py`**: `merge_items` table added to the schema (ordered tray entries; existing dbs pick it up on next engine start via `CREATE TABLE IF NOT EXISTS`). No CLI change.
+- **`server.py`**: new merge-tray section — one implicit ordered playlist of finished jobs' collected videos with `POST /api/merge/add|remove|move|clear|run` and `GET /api/merge/file/<name>` (API 1.5, additive; `merge` + `merge_run` fields also embedded in `/api/state` and published as a `merge` SSE event). `/api/merge/run` ffprobe-validates every clip (codec/width/height/fps must match — v1 refuses mismatches instead of re-encoding) and concatenates with stream-copy (`-f concat -c copy -movflags +faststart`) into `movies_dir/merges/<name>.<ext>` (auto-suffixed, never overwrites), parsing ffmpeg `-progress` output for a live percent. The merge is a local subprocess in a background thread — it never touches the engine loop, `engine.lock`, or remote hosts, so it's safe to run while the queue renders. Includes a scratch-server live test pass (add/move/remove/clear, real two-clip merge with duration verification, download endpoint, path-traversal guard).
+- **`static/index.html`**: "Merge tray" card under History — ordered rows with ↑/↓/✕ per entry plus Clear; ➕ button on done history rows appends a job's video; "Merge…" prompts for an output name and shows a progress bar, then a download link for the finished file (missing artifacts gray out the button with a "video missing" badge).
+- **`docs/expansion-of-this-idea.md`**: Idea 6 (interactive merge playlist) marked **Done (v1)** with the resolved design decisions; **`docs/api.md`**: new "Merge tray" section + version 1.5; **`docs/features.md`**: merge-tray bullet; **`docs/architecture.md`**: `movies_dir/merges/` noted in the state table.
+
 ### Docs: TODO — live sampling preview in the dashboard
 
 - **`docs/features.md`**: new TODO noting that `--disable-preview` is deliberately included with every `generate` invocation (hosts.yaml `disable_preview: true`, the `conf()` default, applied in both `gen_args` and `serve_args`) until ltxq implements a live preview surface — capturing the engine's preview stream and pushing it over SSE — after which the flag default could flip. Docs-only change; no code touched (the flag was already always on).
