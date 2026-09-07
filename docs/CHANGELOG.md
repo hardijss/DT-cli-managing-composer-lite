@@ -2,6 +2,13 @@
 
 All notable changes, bug fixes, and feature additions to `ltxq` are documented here.
 
+## [Unreleased] - 2026-09-07
+
+### Feature: audio-batch sticky per-segment .json config sidecars
+
+- **`ltxq.py`**: audio-segment batch composer (`add-batch`) automatically detects same-named `<stem>.json` sidecars (e.g. `One_0001.json`), validates them upfront as JSON objects with dimension/FPS guards, and applies them as sticky cumulative Config JSON overlays across subsequent segments until replaced by another `.json` sidecar.
+- **`docs/expansion-of-this-idea.md`**, **`docs/features.md`**: updated audio-batch input contracts and CLI documentation to describe the `.json` config sidecar behavior.
+
 ## [Unreleased] - 2026-09-06
 
 ### Fix: "Copy from New job" now carries the start image; no-cache for the dashboard

@@ -1041,6 +1041,11 @@ def _cmd_add_batch(c, con, a):
                   key=_natural_key)
     if not wavs:
         sys.exit(f"no .wav segments in {segdir}")
+    wav_stems = {p.stem for p in wavs}
+    for jp in sorted(segdir.glob("*.json")):
+        if jp.stem not in wav_stems:
+            print(f"warn: {jp.name} in {segdir.name} does not match any .wav segment",
+                  file=sys.stderr)
     if a.manifest:
         man = _parse_audio_manifest(Path(a.manifest).expanduser())
         if man is None:
@@ -1118,8 +1123,26 @@ def _cmd_add_batch(c, con, a):
                 cand = segdir / (p.stem + ext)
                 if cand.exists():
                     img = cand; break
+        cfg_cand = segdir / (p.stem + ".json")
+        cfg_delta = None
+        if cfg_cand.exists():
+            try:
+                parsed = json.loads(cfg_cand.read_text())
+                if not isinstance(parsed, dict):
+                    errors.append(f"{cfg_cand.name}: JSON root must be an object {{...}}, got {type(parsed).__name__}")
+                else:
+                    cfg_delta = parsed
+                    for k in ("width", "height"):
+                        if cfg_delta.get(k) and cfg_delta[k] % 64:
+                            print(f"warn: {cfg_cand.name}: {k}={cfg_delta[k]} is not a multiple of 64")
+                    if man and man["fps"] and cfg_delta.get("fps") and float(man["fps"]) != float(cfg_delta["fps"]):
+                        errors.append(f"{cfg_cand.name}: fps {cfg_delta['fps']} != manifest fps {man['fps']}")
+            except json.JSONDecodeError as e:
+                errors.append(f"{cfg_cand.name}: invalid JSON ({e})")
         items.append({"wav": p, "frames": frames, "prompt": prompt, "name": p.stem,
-                      "note": note, "fit": fit, "image": img})
+                      "note": note, "fit": fit, "image": img,
+                      "cfg_file": cfg_cand.name if cfg_delta is not None else None,
+                      "cfg_delta": cfg_delta})
     if errors:
         for e in errors:
             print("ERROR:", e, file=sys.stderr)
@@ -1137,6 +1160,8 @@ def _cmd_add_batch(c, con, a):
     tmp = HERE / "jobs" / "_tmp" / ("batch_" + uuid.uuid4().hex[:8])
     tmp.mkdir(parents=True, exist_ok=True)
     print(f"queueing {len(items)} job(s) as batch '{batch}'")
+    active_overlay = {}
+    active_src = None
     try:
         for i, it in enumerate(items):
             src = it["wav"]
@@ -1147,19 +1172,32 @@ def _cmd_add_batch(c, con, a):
                 except RuntimeError as e:
                     print(f"ERROR: {it['name']}: {e} — segment skipped", file=sys.stderr)
                     continue
-            job_cfg = dict(obj); job_cfg["numFrames"] = it["frames"]
+            cfg_tag = ""
+            if it["cfg_delta"] is not None:
+                active_overlay.update(it["cfg_delta"])
+                active_src = it["cfg_file"]
+                cfg_tag = f"  [config: {it['cfg_file']}]"
+            elif active_src:
+                cfg_tag = f"  [config: from {active_src}]"
+
+            job_cfg = dict(obj)
+            if active_overlay:
+                job_cfg.update(active_overlay)
+            job_cfg["numFrames"] = it["frames"]
             assets = [("--audio", str(src))]
             if it["image"]:
                 assets.append(("--image", str(it["image"])))
+            job_fps = job_cfg.get("fps") or tfps
             jid = create_job(c, con, a.model, it["prompt"],
                              json.dumps(job_cfg, indent=2),
                              assets, list(seed_extra),
                              host=a.host, name=it["name"], ext=a.ext,
                              backend=a.backend, batch=batch, chain=chain if i else None,
-                             num_frames=it["frames"], fps=tfps)
+                             num_frames=it["frames"], fps=job_fps)
             tag = "  [--image]" if it["image"] else ""
             if it["image"] and chain and i:
                 tag += "  [chain skipped — manual --image wins]"
+            tag += cfg_tag
             print(f"{jid}  {it['name']}  {it['frames']} frames{tag}"
                   + (f"  [{it['note']}]" if it["note"] else ""))
     finally:

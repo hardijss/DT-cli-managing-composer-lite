@@ -64,6 +64,10 @@ Banderos Cats-2_0008.wav: 181 frames (7.240s, Non-8n+1)
   manual `--image` (explicit start image for segment 1) wins over a sidecar;
   a segment with any `--image` skips the visual chain for that segment
   (manual attachments take precedence in `resolve_chain`).
+- optionally per-segment config sidecars: same basename with a `.json`
+  extension (`Name_0001.json` …) — validated and cumulatively merged as the
+  config JSON overlay for that segment's job, carrying forward (sticky) to
+  subsequent segments until another `.json` sidecar updates it.
 
 ### Frames: where each job's numFrames comes from
 

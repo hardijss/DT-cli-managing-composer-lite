@@ -102,7 +102,9 @@
   image to segment 1 (the chain anchor), and same-named
   `<stem>.png/jpg/jpeg/webp` files next to the wavs are picked up as
   per-segment `--image` (a manual `--image` wins over the chain for that
-  segment)
+  segment); same-named `<stem>.json` files are picked up as per-segment
+  config overlays, validated upfront and cumulatively carried forward (sticky)
+  until another `.json` sidecar appears
 - `doctor`: db self-checks (set_job single-row), ssh reachability, remote
   shell arithmetic, worker liveness, flask presence
 
