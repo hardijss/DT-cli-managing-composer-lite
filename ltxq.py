@@ -981,11 +981,38 @@ def _natural_key(p):
     m = NATNUM.search(p.stem)
     return (m.group(1) if m else p.stem, int(m.group(2)) if m else -1, p.name)
 
-def _snap_frames(raw, up=True):
-    """Snap a raw frame count onto the 8n+1 grid (the LTX-2 constraint):
+# Frame grids: valid lengths are step*n + base with n >= min_n.
+# LTX-2 / WAN: 8n+1 (composer floor 9 via min_n=1 — the historical max(n, 1)
+# clamp). MiniMax H3: 17n+5 with n >= 0 (5 frames valid; spec 2026-09-15).
+# Unknown models default to the LTX grid.
+DEFAULT_GRID = (8, 1, 1)
+FRAME_GRIDS = (
+    ("minimax", (17, 5, 0)),
+    ("ltx", (8, 1, 1)),
+    ("wan", (8, 1, 1)),
+)
+
+
+def frame_grid(model):
+    """(step, base, min_n) for a model name; LTX-2 8n+1 is the default.
+    'H3' matches on token boundaries so MiniMax-H3 and minimax_h3_7b match,
+    but wanh3x does not."""
+    m = (model or "").lower()
+    if "minimax" in m or re.search(r"(?<![a-z0-9])h3(?![a-z0-9])", m):
+        return (17, 5, 0)
+    for key, grid in FRAME_GRIDS:
+        if key in m:
+            return grid
+    return DEFAULT_GRID
+
+
+def _snap_frames(raw, up=True, grid=DEFAULT_GRID):
+    """Snap a raw frame count onto a model's frame grid (step*n + base,
+    n >= min_n). LTX-2/WAN: 8n+1 (floor 9); MiniMax H3: 17n+5 (floor 5).
     up pads ~a fraction of a second of silence, down trims the tail."""
-    n = ((raw - 1) + 7) // 8 if up else (raw - 1) // 8
-    return 8 * max(n, 1) + 1
+    step, base, min_n = grid
+    n = ((raw - base) + (step - 1)) // step if up else (raw - base) // step
+    return step * max(n, min_n) + base
 
 def _parse_audio_manifest(path):
     """Parse the cutting helper's manifest; None when the file doesn't carry
@@ -1037,7 +1064,7 @@ def _cmd_add_batch(c, con, a):
     """Audio mode: one job per wav segment in a directory. Frames come from
     the helper's manifest (verbatim, cross-checked) or ffprobe + grid snap;
     prompts from same-basename .txt sidecars, falling back to --prompt-file.
-    Non-8n+1 lengths default to rounding up with a silence pad. Validates the
+    Non-grid lengths default to rounding up with a silence pad. Validates the
     whole batch before queueing anything."""
     if ".." in a.model or a.model.startswith("/"):
         sys.exit("invalid --model: must be a model id, not a path with '..' or '/'")
@@ -1067,6 +1094,10 @@ def _cmd_add_batch(c, con, a):
         if man:
             print(f"manifest: {man_path.name}")
     cfg_text, obj = _load_cfg(c, con, a.model, a.config_file, a.config_json)
+    grid = frame_grid(a.model)
+    step, base, min_n = grid
+    grid_floor = step * min_n + base
+    print(f"frame grid: {step}n+{base} (floor {grid_floor}) — {a.model}")
     tfps = obj.get("fps")
     fps = float(tfps) if tfps else (float(man["fps"]) if man and man["fps"] else None)
     if man and man["fps"] and tfps and float(man["fps"]) != float(tfps):
@@ -1094,17 +1125,18 @@ def _cmd_add_batch(c, con, a):
                 errors.append(f"{p.name}: no manifest and no fps (template config or "
                               "manifest header) — cannot derive a frame count"); continue
             src_frames = round(dur * fps)
-            if src_frames < 9:
-                errors.append(f"{p.name}: {dur:.2f}s is under the 9-frame minimum "
-                              f"at {fps:g} fps"); continue
+            if src_frames < grid_floor:
+                errors.append(f"{p.name}: {dur:.2f}s is under the {grid_floor}-frame "
+                              f"minimum ({step}n+{base}) at {fps:g} fps"); continue
         note, fit = "", None
-        if src_frames % 8 != 1:
+        if src_frames % step != base:
             if a.on_non_grid == "refuse":
-                errors.append(f"{p.name}: {src_frames} frames is Non-8n+1 "
+                errors.append(f"{p.name}: {src_frames} frames is non-{step}n+{base} "
                               "(--on-non-grid refuse)"); continue
-            frames = _snap_frames(src_frames, up=(a.on_non_grid == "round-up"))
+            frames = _snap_frames(src_frames, up=(a.on_non_grid == "round-up"),
+                                  grid=grid)
             fit = "pad" if frames > src_frames else "trim"
-            note = (f"non-8n+1 {src_frames} → {frames} frames "
+            note = (f"non-{step}n+{base} {src_frames} → {frames} frames "
                     f"({abs(src_frames - frames) / fps:.2f}s "
                     + ("padded" if fit == "pad" else "trimmed") + ")")
         else:
@@ -1651,7 +1683,7 @@ def main():
                         "header-bearing .txt in the segment dir)")
     g.add_argument("--on-non-grid", choices=["round-up", "round-down", "refuse"],
                    default="round-up",
-                   help="a segment whose frame count is not 8n+1: round up and pad "
+                   help="a segment whose frame count is not on the model's frame grid: round up and pad "
                         "the wav with silence (default), round down and trim it, "
                         "or refuse the batch")
     g.add_argument("--chain", action="store_true",

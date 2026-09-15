@@ -77,7 +77,7 @@
 - Audio batch form: pick or drop a segment folder (or paste a server-side
   path) and queue one job per `.wav` with the same frame/prompt/grid rules as
   `add-batch` — model/host/ext/seed/config-overlay/batch-label fields, shared
-  fallback prompt, non-8n+1 policy selector, visual-continuity checkbox
+  fallback prompt, non-grid policy selector, visual-continuity checkbox
   (previous segment's last frame as `--image`), a start-image dropzone for
   segment 1, and a "Copy from New job" button (model, host, ext, seed,
   config overlay, prompt); validation failures list every offending segment
@@ -89,7 +89,8 @@
 - `add-batch <dir>`: audio-segment batch composer (see
   expansion-of-this-idea.md Idea 1) — one job per `.wav` in a segment dir,
   `numFrames` per job from the cutting helper's manifest (verbatim,
-  cross-checked) or ffprobed from the wav and snapped onto the 8n+1 grid
+  cross-checked) or ffprobed from the wav and snapped onto the model's frame grid
+  (8n+1 LTX/WAN, 17n+5 H3)
   (non-grid lengths default to round-up + silence pad; `--on-non-grid
   round-down|refuse` for the alternatives); prompts from same-basename
   `.txt` sidecars falling back to `--prompt-file`; batch label defaults to

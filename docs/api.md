@@ -126,7 +126,8 @@ group in the UI, and dispatch order follows submission order
 Multipart/form-data. Queues one job per `.wav` in a segment directory (see
 `ltxq add-batch`, expansion-of-this-idea.md Idea 1): per-job `numFrames` from
 the cutting helper's manifest when one is present (verbatim, cross-checked)
-or ffprobed from each wav and snapped onto the 8n+1 grid; prompts from
+or ffprobed from each wav and snapped onto the model's frame grid
+(8n+1 LTX/WAN, 17n+5 H3); prompts from
 same-basename `.txt` sidecars falling back to `prompt`. The whole batch is
 validated before anything is queued — a refusal returns 400 with a per-item
 error list and no jobs created.

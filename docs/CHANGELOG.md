@@ -4,6 +4,12 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
 
 ## [Unreleased] - 2026-09-07
 
+### Feature: model-aware frame grids (Phase 1 — MiniMax H3 prep)
+
+- **`ltxq.py`**: the frame-grid rule is now model-aware. `frame_grid(model)` maps a model name to its `(step, base, min_n)` grid — LTX-2/WAN stay `8n+1` (floor 9), MiniMax H3 uses `17n+5` with `n >= 0` (5-frame floor). `_snap_frames` takes the grid as a parameter, and the audio batch composer's on-grid check, floor guard, refuse/snap messages, and per-segment notes are grid-aware. Unknown models default to LTX `8n+1`, so existing behavior is unchanged.
+- **`static/index.html`**: batch form label "Non-8n+1 segment" → "Non-grid segment (8n+1 LTX/WAN · 17n+5 H3)".
+- **`tests/test_frames.py`**: MiniMax H3 table + invariant tests added; the Phase 0 LTX spec-lock tests are unchanged and still green.
+
 ### Fix: dashboard preserves chained batch ordering
 
 - **`ltxq.py`, `server.py`**: extracted the queue's batch-chain eligibility check into one shared job selector and use it from both engine entry points. The dashboard now defers a queued chained batch job while another job from that batch is active, matching headless `run` behavior and ensuring each job continues from its actual predecessor frame.
