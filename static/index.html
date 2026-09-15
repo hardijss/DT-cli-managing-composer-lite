@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ltxq — render queue</title>
 <style>
-:root { --bg:#111418; --card:#1b2027; --edge:#2a313b; --fg:#e6e9ee; --dim:#8b94a3;
+:root { --bg:#111418; --card:#1b2027; --edge:#2a313b; --fg:#e6e9ee; --dim:#9aa4b2;
         --acc:#4f9cf9; --ok:#3fb96f; --warn:#e2a63d; --bad:#e05a5a; }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--fg);
@@ -14,6 +14,8 @@ main { max-width:1080px; margin:0 auto; padding:20px 16px 60px; }
 h1 { font-size:20px; margin:0 0 2px; }
 h2 { font-size:15px; margin:28px 0 10px; color:var(--dim); text-transform:uppercase;
      letter-spacing:.06em; }
+h3.card-h { font-size:12.5px; margin:18px 0 8px; color:var(--dim);
+            text-transform:uppercase; letter-spacing:.06em; font-weight:600; }
 .sub { color:var(--dim); font-size:12.5px; }
 .card { background:var(--card); border:1px solid var(--edge); border-radius:10px;
         padding:14px 16px; margin-bottom:10px; }
@@ -171,7 +173,7 @@ a { color:var(--acc); text-decoration:none; }
       </select>
     </div>
 
-    <h2 style="margin-top:18px">Frames from a finished video (ffmpeg)</h2>
+    <h3 class="card-h">Frames from a finished video (ffmpeg)</h3>
     <div class="row">
       <select id="srcjob" style="flex:1; min-width:180px"></select>
       <input id="frame" placeholder="frame #, first, last" style="width:130px">
@@ -189,6 +191,7 @@ a { color:var(--acc); text-decoration:none; }
     <div class="row" style="margin-top:14px">
       <button type="submit">Add to queue</button>
       <button type="button" class="sec" id="lastcfg">Fill config from last job</button>
+      <span class="sub">⌘⏎ submit · / prompt</span>
       <span class="sub" id="addmsg"></span>
     </div>
     </form>
@@ -807,10 +810,48 @@ $("mergeRun").onclick = async () => {
   } catch (e) { flash(e.message, true); }
 };
 
-async function refresh() {
-  try { render(await api("/api/state")); } catch (e) { flash(e.message, true); }
+// ---- live updates ----
+// /api/events (SSE) pushes hello / job / job_removed / host / engine / merge
+// events; each one triggers a short-debounced refetch, so changes land in a
+// fraction of a second. The poll loop remains as the fallback (and for any
+// event types added later), but a state signature makes it a no-op while
+// nothing has changed — idle re-renders and the focus juggling they caused
+// disappear, and the poll stretches to 8 s while the stream is healthy.
+let lastSig = null, sseLive = false, refreshTimer = null, lastPoll = 0;
+
+function renderState(d) {
+  const sig = JSON.stringify(d);
+  if (sig === lastSig) return;
+  lastSig = sig;
+  render(d);
 }
-refresh(); setInterval(refresh, 2000);
+
+async function refresh() {
+  lastPoll = Date.now();
+  try { renderState(await api("/api/state")); } catch (e) { flash(e.message, true); }
+}
+function refreshSoon(ms = 250) {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(refresh, ms);
+}
+refresh();
+setInterval(() => {
+  if (Date.now() - lastPoll >= (sseLive ? 8000 : 2000)) refresh();
+}, 500);
+
+function connectEvents() {
+  if (!window.EventSource) return;
+  const es = new EventSource("/api/events");
+  es.addEventListener("hello", ev => {
+    sseLive = true; lastPoll = Date.now();
+    try { renderState(JSON.parse(ev.data)); } catch (e) {}
+  });
+  ["job", "job_removed", "host", "engine", "merge"].forEach(name =>
+    es.addEventListener(name, () => refreshSoon()));
+  es.addEventListener("open", () => { sseLive = true; });
+  es.addEventListener("error", () => { sseLive = false; });
+}
+connectEvents();
 
 async function loadModels(alias) {
   try {
@@ -1011,7 +1052,25 @@ overlay.addEventListener("click", e => {
   if (e.target === overlay) overlay.classList.remove("open");
 });
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") overlay.classList.remove("open");
+  if (e.key === "Escape") { overlay.classList.remove("open"); return; }
+  // ⌘/Ctrl+Enter submits the form you're typing in; "/" jumps to the prompt
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+    const form = e.target && e.target.closest ? e.target.closest("form") : null;
+    if (!form) return;
+    e.preventDefault();
+    const btn = form.querySelector('button[type="submit"]');
+    if (form.requestSubmit) form.requestSubmit();
+    else if (btn) btn.click();
+  } else if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    const t = e.target;
+    if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" ||
+              t.tagName === "SELECT" || t.isContentEditable)) return;
+    if (overlay.classList.contains("open")) return;
+    e.preventDefault();
+    const p = $("prompt");
+    p.focus();
+    p.setSelectionRange(p.value.length, p.value.length);
+  }
 });
 
 const fmtBytes = b => (b === null || b === undefined) ? "—" :
