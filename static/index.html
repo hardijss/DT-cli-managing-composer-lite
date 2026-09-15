@@ -22,11 +22,15 @@ h3.card-h { font-size:12.5px; margin:18px 0 8px; color:var(--dim);
 .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
 .grow { flex:1; }
 button { background:var(--acc); color:#fff; border:0; border-radius:7px;
-         padding:7px 14px; font:inherit; cursor:pointer; }
+         padding:7px 14px; font:inherit; cursor:pointer;
+         display:inline-flex; align-items:center; justify-content:center; gap:5px; }
 button.sec { background:#39424f; }
 button.danger { background:var(--bad); }
 button:disabled { opacity:.45; cursor:default; }
-button svg { display:block; }
+button svg { display:block; flex:none; }
+.badge svg { display:block; flex:none; }
+.st-ok svg, .st-bad svg, .paused-banner svg { display:inline-block;
+  vertical-align:-1.5px; margin-right:1px; }
 input, select, textarea { background:#141920; color:var(--fg); border:1px solid var(--edge);
         border-radius:7px; padding:8px 10px; font:inherit; width:100%; }
 textarea { min-height:84px; resize:vertical; }
@@ -34,7 +38,8 @@ label { font-size:12px; color:var(--dim); display:block; margin:10px 0 4px; }
 .bar { height:8px; background:#0d1013; border-radius:4px; overflow:hidden; margin:8px 0 4px; }
 .bar > div { height:100%; background:var(--acc); transition:width 1.5s ease; }
 .pct { font-size:12px; color:var(--dim); }
-.badge { font-size:11px; padding:2px 8px; border-radius:10px; background:#39424f; }
+.badge { font-size:11px; padding:2px 8px; border-radius:10px; background:#39424f;
+         display:inline-flex; align-items:center; gap:4px; }
 .badge.done { background:var(--ok); color:#08130c; }
 .badge.running,.badge.collecting { background:var(--acc); color:#0a1626; }
 .badge.failed { background:var(--bad); color:#fff; }
@@ -141,16 +146,16 @@ a { color:var(--acc); text-decoration:none; }
       </div>
     </div>
     <div class="grid">
-      <div><label>Image (--image)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="image"><input type="file" id="image" accept="image/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="image" title="clear selected file" hidden>✕</button></div></div>
-      <div><label>Audio (--audio)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="audio"><input type="file" id="audio" accept="audio/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="audio" title="clear selected file" hidden>✕</button></div></div>
+      <div><label>Image (--image)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="image"><input type="file" id="image" accept="image/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="image" title="clear selected file" hidden><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div></div>
+      <div><label>Audio (--audio)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="audio"><input type="file" id="audio" accept="audio/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="audio" title="clear selected file" hidden><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div></div>
     </div>
     <div class="grid">
-      <div><label>Input video (--input-video)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="input_video"><input type="file" id="input_video" accept="video/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="input_video" title="clear selected file" hidden>✕</button></div></div>
-      <div><label>First frame (--first-frame)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="first_frame"><input type="file" id="first_frame" accept="image/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="first_frame" title="clear selected file" hidden>✕</button></div></div>
+      <div><label>Input video (--input-video)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="input_video"><input type="file" id="input_video" accept="video/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="input_video" title="clear selected file" hidden><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div></div>
+      <div><label>First frame (--first-frame)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="first_frame"><input type="file" id="first_frame" accept="image/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="first_frame" title="clear selected file" hidden><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div></div>
     </div>
     <div class="grid">
-      <div><label>Middle frame (--middle-frame)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="middle_frame"><input type="file" id="middle_frame" accept="image/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="middle_frame" title="clear selected file" hidden>✕</button></div></div>
-      <div><label>Last frame (--last-frame)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="last_frame"><input type="file" id="last_frame" accept="image/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="last_frame" title="clear selected file" hidden>✕</button></div></div>
+      <div><label>Middle frame (--middle-frame)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="middle_frame"><input type="file" id="middle_frame" accept="image/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="middle_frame" title="clear selected file" hidden><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div></div>
+      <div><label>Last frame (--last-frame)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="last_frame"><input type="file" id="last_frame" accept="image/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="last_frame" title="clear selected file" hidden><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div></div>
     </div>
     <label>LTX keyframes — image + index (frame number), optional strength:attention
       (e.g. <span class="mono">12</span> or <span class="mono">12:0.8:1.0</span>)</label>
@@ -218,7 +223,7 @@ a { color:var(--acc); text-decoration:none; }
           <div class="filerow"><label class="filedrop" tabindex="0" data-dz="batchseg">
             <input type="file" id="batchseg" webkitdirectory multiple>
             <span class="dz-label">choose folder (uploads the files)</span></label>
-            <button type="button" class="sec" data-clear="batchseg" title="clear selected folder" hidden>✕</button></div></div>
+            <button type="button" class="sec" data-clear="batchseg" title="clear selected folder" hidden><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div></div>
       </div>
       <label>Shared prompt — used for segments without a <span class="mono">.txt</span> sidecar</label>
       <textarea id="bprompt" style="min-height:56px"></textarea>
@@ -242,7 +247,7 @@ a { color:var(--acc); text-decoration:none; }
           (overrides a same-named sidecar image; segments with a sidecar image skip the chain)</label>
           <div class="filerow"><label class="filedrop" tabindex="0" data-dz="bimage">
             <input type="file" id="bimage" accept="image/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label>
-            <button type="button" class="sec" data-clear="bimage" title="clear selected image" hidden>✕</button></div></div>
+            <button type="button" class="sec" data-clear="bimage" title="clear selected image" hidden><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div></div>
       </div>
       <div class="row" style="margin-top:14px">
         <button type="submit">Queue batch</button>
@@ -275,7 +280,7 @@ a { color:var(--acc); text-decoration:none; }
     <div class="hd"><h2>Settings &amp; server status</h2>
       <span class="grow"></span>
       <button type="button" class="sec" id="statusRefresh">Refresh</button>
-      <button type="button" class="sec" id="statusClose" title="close">✕</button></div>
+      <button type="button" class="sec" id="statusClose" title="close" aria-label="close"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
     <div class="sub">Read-only snapshot of the engine server and the components it
       uses. Editing these settings from the UI arrives with the native
       preferences pane — for now they live in <span class="mono">hosts.yaml</span>.</div>
@@ -289,6 +294,23 @@ const esc = s => (s ?? "").toString().replace(/[&<>"]/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmt = s => { s = Math.max(0, s|0);
   return s >= 3600 ? `${s/3600|0}h${(s%3600)/60|0}m` : s >= 60 ? `${s/60|0}m${s%60}s` : `${s}s`; };
+
+// monoline icon set — one visual language across the dashboard; currentColor
+// strokes on a 24-grid (no emoji glyphs: those render at the mercy of the OS)
+const ico = (d, size = 13) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const ICONS = {
+  plus: ico('<path d="M12 5v14M5 12h14"/>'),
+  x: ico('<path d="M6 6l12 12M18 6L6 18"/>'),
+  check: ico('<path d="M4.5 12.5l5 5L19.5 7"/>', 12),
+  pause: ico('<path d="M9 5v14M15 5v14"/>', 12),
+  play: ico('<path d="M7.5 4.8v14.4a.6.6 0 0 0 .9.5l11.4-7.2a.6.6 0 0 0 0-1L8.4 4.3a.6.6 0 0 0-.9.5z"/>', 12),
+  chain: ico('<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>', 12),
+  box: ico('<path d="M21 8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7z"/><path d="M3.3 7l8.7 5 8.7-5M12 22V12"/>', 12),
+  audio: ico('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>', 12),
+  file: ico('<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><path d="M14 2v6h6"/>', 12),
+  up: ico('<path d="M12 19V5M5 12l7-7 7 7"/>', 12),
+  down: ico('<path d="M12 5v14M19 12l-7 7-7-7"/>', 12),
+};
 
 function flash(msg, err) {
   const f = $("flash"); f.textContent = msg; f.className = err ? "err" : "msg";
@@ -338,9 +360,9 @@ function render(d) {
         const secsLeft = Math.max(0, h.release_at - (d.now || Math.floor(Date.now()/1000)));
         const hh = (secsLeft/3600|0), mm = ((secsLeft%3600)/60|0), ss = secsLeft%60;
         const countdown = hh ? `${hh}h ${mm}m` : mm ? `${mm}m ${ss}s` : `${ss}s`;
-        pausedBit = `<span class="paused-banner">⏸ dispatch paused — releases in ${countdown}</span>`;
+        pausedBit = `<span class="paused-banner">${ICONS.pause} dispatch paused — releases in ${countdown}</span>`;
       } else {
-        pausedBit = `<span class="paused-banner">⏸ dispatch paused</span>`;
+        pausedBit = `<span class="paused-banner">${ICONS.pause} dispatch paused</span>`;
       }
     }
     if (idle.busy)
@@ -354,8 +376,8 @@ function render(d) {
         ${pausedBit}
       </div>
       <div class="qctrl">
-        <button class="sec" data-pause="${esc(h.alias)}" ${h.paused ? "disabled" : ""}>⏸ Pause</button>
-        <button data-resume="${esc(h.alias)}" ${h.paused ? "" : "disabled"}>▶ Resume</button>
+        <button class="sec" data-pause="${esc(h.alias)}" ${h.paused ? "disabled" : ""}>${ICONS.pause} Pause</button>
+        <button data-resume="${esc(h.alias)}" ${h.paused ? "" : "disabled"}>${ICONS.play} Resume</button>
         <span class="sub">Schedule release:</span>
         <input type="text" class="rel-input mono" id="rel-${esc(h.alias)}" placeholder="22:00 or +2h" style="width:140px">
         <button class="sec" data-schedule="${esc(h.alias)}">Set &amp; pause</button>
@@ -440,8 +462,8 @@ function render(d) {
         <b>${esc(j.name)}</b> <span class="mono sub">${esc(j.id)}</span>
         <span class="badge ${esc(j.status)}">${esc(j.status)}</span>
         <span class="badge">${esc(j.backend||"-")} / ${esc(j.host||"-")}</span>
-        ${j.chain ? `<span class="badge" title="continuation: last frame of the previous generation">⛓ ${esc(j.chain)}</span>` : ""}
-        ${j.batch ? `<span class="badge" title="batch group — 'continue from previous' stays inside this batch">📦 ${esc(j.batch)}</span>` : ""}
+        ${j.chain ? `<span class="badge" title="continuation: last frame of the previous generation">${ICONS.chain} ${esc(j.chain)}</span>` : ""}
+        ${j.batch ? `<span class="badge" title="batch group — 'continue from previous' stays inside this batch">${ICONS.box} ${esc(j.batch)}</span>` : ""}
         <span class="grow"></span>
         <span class="pct">${j.bar}% · ${fmt(j.elapsed)}</span>
         <button class="danger" data-cancel="${esc(j.id)}">Cancel</button>
@@ -476,25 +498,25 @@ function render(d) {
             if (isImg) {
               return `<a href="/api/asset/${esc(j.id)}/${encodeURIComponent(a.file)}" target="_blank"><img src="/api/asset/${esc(j.id)}/${encodeURIComponent(a.file)}" title="${esc(a.flag || "upload")} · ${esc(a.file)}" style="height:44px;border-radius:4px;margin:3px"></a>`;
             } else if (isAud) {
-              return `<a href="/api/asset/${esc(j.id)}/${encodeURIComponent(a.file)}" target="_blank" style="display:inline-flex;align-items:center;gap:4px;background:#2a313b;padding:3px 8px;border-radius:4px;margin:3px;font-size:11px" title="${esc(a.flag || "upload")} · ${esc(a.file)}">🎵 ${esc(a.flag || "audio")}: ${esc(a.file)}</a>`;
+              return `<a href="/api/asset/${esc(j.id)}/${encodeURIComponent(a.file)}" target="_blank" style="display:inline-flex;align-items:center;gap:4px;background:#2a313b;padding:3px 8px;border-radius:4px;margin:3px;font-size:11px" title="${esc(a.flag || "upload")} · ${esc(a.file)}">${ICONS.audio} ${esc(a.flag || "audio")}: ${esc(a.file)}</a>`;
             } else {
-              return `<a href="/api/asset/${esc(j.id)}/${encodeURIComponent(a.file)}" target="_blank" style="display:inline-flex;align-items:center;gap:4px;background:#2a313b;padding:3px 8px;border-radius:4px;margin:3px;font-size:11px" title="${esc(a.flag || "upload")} · ${esc(a.file)}">📁 ${esc(a.flag || "file")}: ${esc(a.file)}</a>`;
+              return `<a href="/api/asset/${esc(j.id)}/${encodeURIComponent(a.file)}" target="_blank" style="display:inline-flex;align-items:center;gap:4px;background:#2a313b;padding:3px 8px;border-radius:4px;margin:3px;font-size:11px" title="${esc(a.flag || "upload")} · ${esc(a.file)}">${ICONS.file} ${esc(a.flag || "file")}: ${esc(a.file)}</a>`;
             }
           }).join("") +
           `</details>`
         : "";
       return `<tr>
       <td class="mono">${esc(j.id)}</td>
-      <td>${j.chain ? `<span class="badge" title="continuation: last frame of the previous generation attached as ${esc(j.chain)}">⛓</span> ` : ""}${j.batch ? `<span class="badge" title="batch group">📦</span> ` : ""}${esc(j.name)}${inputs}</td>
+      <td>${j.chain ? `<span class="badge" title="continuation: last frame of the previous generation attached as ${esc(j.chain)}">${ICONS.chain}</span> ` : ""}${j.batch ? `<span class="badge" title="batch group">${ICONS.box}</span> ` : ""}${esc(j.name)}${inputs}</td>
       <td><span class="badge ${esc(j.status)}">${esc(j.status)}</span></td>
       <td>${esc(j.backend||"-")}</td>
       <td>${j.pct}%</td><td>${fmt(j.elapsed)}</td>
       <td class="note">${esc((j.note||"") + (j.local_out ? " · " + j.local_out : ""))}</td>
       <td><a href="/api/view/${esc(j.id)}" target="_blank">View</a>
           <button class="sec" data-load="${esc(j.id)}">Load</button>
-          ${j.status === "done" && j.local_out ? `<button class="sec" data-madd="${esc(j.id)}" title="add this job's collected video to the merge tray" aria-label="add to merge tray"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M6 1.5v9M1.5 6h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>` : ""}
+          ${j.status === "done" && j.local_out ? `<button class="sec" data-madd="${esc(j.id)}" title="add this job's collected video to the merge tray" aria-label="add to merge tray">${ICONS.plus}</button>` : ""}
           ${ATTACH_MEDIA ? `<button class="sec" data-attach="${esc(j.id)}" title="attach this job's input files (image / first / middle / last frame, audio, keyframes) on top of the current form — a slot already staged is replaced, the rest is kept">+ media</button>` : ""}
-          <button class="danger" data-del="${esc(j.id)}">✕</button></td>
+          <button class="danger" data-del="${esc(j.id)}" title="delete from history">${ICONS.x}</button></td>
     </tr>`; }).join("");
   document.querySelectorAll("[data-load]").forEach(b =>
     b.onclick = async () => {
@@ -573,9 +595,9 @@ function renderTray(d) {
       <span class="grow">${it.gone ? '<span class="sub">(deleted job)</span> ' : ""}${esc(it.name || it.jid)}
         <span class="mono sub">${esc(it.jid)}</span>
         ${it.gone || !it.video ? ' <span class="badge failed">video missing</span>' : ""}</span>
-      <button class="sec" data-mup="${it.pos}" ${i === 0 ? "disabled" : ""} title="move up">↑</button>
-      <button class="sec" data-mdown="${it.pos}" ${i === tray.length - 1 ? "disabled" : ""} title="move down">↓</button>
-      <button class="sec" data-mrm="${it.pos}" title="remove from tray">✕</button>
+      <button class="sec" data-mup="${it.pos}" ${i === 0 ? "disabled" : ""} title="move up">${ICONS.up}</button>
+      <button class="sec" data-mdown="${it.pos}" ${i === tray.length - 1 ? "disabled" : ""} title="move down">${ICONS.down}</button>
+      <button class="sec" data-mrm="${it.pos}" title="remove from tray">${ICONS.x}</button>
     </div>`).join("")
     : '<div class="sub">empty — add finished jobs with the + button in History</div>';
   document.querySelectorAll("[data-mup]").forEach(b =>
@@ -739,7 +761,7 @@ function addKfRow() {
       <img class="dz-thumb" alt=""><span class="dz-label"></span></label>
     <input type="text" class="mono" placeholder="index[:strength[:att]] e.g. 12:0.8"
            style="width:190px; flex:0 0 auto">
-    <button type="button" class="sec">✕</button>`;
+    <button type="button" class="sec" title="remove keyframe">${ICONS.x}</button>`;
   row.querySelector("button").onclick = () => {
     if (pasteTarget === row.querySelector(".filedrop")) pasteTarget = null;
     row.remove();
@@ -767,10 +789,10 @@ function renderStaged() {
   $("staged").innerHTML = staged.map((s, i) => {
     const ext = (s.name.split('.').pop() || '').toLowerCase();
     const isImg = ["png", "jpg", "jpeg", "webp", "gif"].includes(ext);
-    const thumb = isImg ? `<img src="/api/stage/${encodeURIComponent(s.name)}" width="44" style="border-radius:4px">` : `<span class="badge">🎵/📁 file</span>`;
+    const thumb = isImg ? `<img src="/api/stage/${encodeURIComponent(s.name)}" width="44" style="border-radius:4px">` : `<span class="badge">${ICONS.file} file</span>`;
     return `<span class="badge">${esc(s.slot === "upload" ? "upload" : s.slot)}${s.index ? " #" + esc(s.index) : ""} · ${esc(s.name.split("_").slice(2).join("_"))}</span>
      ${thumb}
-     <button type="button" class="sec" data-unstage="${i}">✕</button>`;
+     <button type="button" class="sec" data-unstage="${i}" title="remove staged file">${ICONS.x}</button>`;
   }).join("");
   document.querySelectorAll("[data-unstage]").forEach(b =>
     b.onclick = () => { staged.splice(+b.dataset.unstage, 1); renderStaged(); });
@@ -1040,7 +1062,7 @@ $("batchform").onsubmit = async ev => {
   } catch (e) { $("batchmsg").textContent = ""; flash(e.message, true); }
 };
 
-// ---- settings & server status overlay (⚙ next to the engine badge) ----
+// ---- settings & server status overlay (gear button next to the engine badge) ----
 // Shows the components the server actually uses (ffmpeg/ffprobe: presence,
 // resolved path, version), the effective hosts.yaml settings, and an engine +
 // per-host summary. Read-only for now; the editable preference pane is future
@@ -1081,8 +1103,8 @@ const fmtBytes = b => (b === null || b === undefined) ? "—" :
 function compRow(c) {
   const ver = c.version ? esc(c.version) : '<span class="sub">version n/a</span>';
   return `<tr><td>${esc(c.name)}</td>
-    <td>${c.present ? '<span class="st-ok">✓ present</span>'
-                    : '<span class="st-bad">✗ missing</span>'}</td>
+    <td>${c.present ? `<span class="st-ok">${ICONS.check} present</span>`
+                    : `<span class="st-bad">${ICONS.x} missing</span>`}</td>
     <td class="mono">${c.path ? esc(c.path) : '<span class="sub">—</span>'}</td>
     <td class="mono">${ver}</td></tr>`;
 }
@@ -1105,8 +1127,8 @@ async function loadStatus() {
       ${sv.conf_error ? `<div class="note st-bad">${esc(sv.conf_error)}</div>` : ""}
       <h3>Server</h3>
       <div class="kv">
-        ${kv("engine", (sv.engine ? '<span class="st-ok">✓ running</span>'
-                                  : '<span class="st-bad">✗ stopped</span>')
+        ${kv("engine", (sv.engine ? `<span class="st-ok">${ICONS.check} running</span>`
+                                  : `<span class="st-bad">${ICONS.x} stopped</span>`)
                         + ` · polls every ${esc(sv.poll_secs ?? "?")}s`)}
         ${kv("dashboard", `http://127.0.0.1:${esc(sv.port ?? window.location.port)}/`)}
         ${kv("repo", esc(sv.repo || "—") + (sv.git ? " · " + esc(sv.git) : ""))}
