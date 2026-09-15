@@ -435,6 +435,30 @@ def _worker_alive(h):
                         f'2>/dev/null && echo ALIVE || echo DEAD')
     return "ALIVE" in r.stdout
 
+
+def next_dispatchable_job(con, alias):
+    """Return the oldest queued job eligible for ``alias``.
+
+    A batch-scoped chained job must wait until every active sibling has
+    finished.  That keeps its launch-time continuation frame deterministic
+    when several hosts have free capacity.  Both engine entry points use this
+    selector so the dashboard and headless scheduler follow the same rule.
+    """
+    for cand in con.execute(
+            "SELECT * FROM jobs WHERE status='queued' AND "
+            "(host IS NULL OR host=?) ORDER BY created_at, rowid",
+            (alias,)).fetchall():
+        if cand["chain"] and cand["batch"]:
+            active = con.execute(
+                "SELECT COUNT(*) FROM jobs WHERE batch=? AND id!=? AND status IN "
+                "('uploading','running','collecting','suspect','cancelling')",
+                (cand["batch"], cand["id"])).fetchone()[0]
+            if active:
+                continue
+        return cand
+    return None
+
+
 def dispatch(c, con):
     for h in con.execute("SELECT * FROM hosts WHERE enabled=1").fetchall():
         busy = con.execute("SELECT COUNT(*) FROM jobs WHERE host=? AND status IN "
@@ -442,23 +466,7 @@ def dispatch(c, con):
                            (h["alias"],)).fetchone()[0]
         if busy >= h["max_jobs"]:
             continue
-        job = None
-        for cand in con.execute(
-                "SELECT * FROM jobs WHERE status='queued' AND "
-                "(host IS NULL OR host=?) ORDER BY created_at, rowid",
-                (h["alias"],)).fetchall():
-            if cand["chain"] and cand["batch"]:
-                # batch-scoped chain: wait for the batch to catch up so the
-                # predecessor's last frame is always the most recent finished
-                # one in the batch (self-serializes across hosts)
-                active = con.execute(
-                    "SELECT COUNT(*) FROM jobs WHERE batch=? AND id!=? AND status IN "
-                    "('uploading','running','collecting','suspect','cancelling')",
-                    (cand["batch"], cand["id"])).fetchone()[0]
-                if active:
-                    continue
-            job = cand
-            break
+        job = next_dispatchable_job(con, h["alias"])
         if job:
             cur = con.execute("UPDATE jobs SET status='uploading', host=? "
                               "WHERE id=? AND status='queued'", (h["alias"], job["id"]))

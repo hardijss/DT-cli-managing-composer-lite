@@ -4,6 +4,10 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
 
 ## [Unreleased] - 2026-09-07
 
+### Fix: dashboard preserves chained batch ordering
+
+- **`ltxq.py`, `server.py`**: extracted the queue's batch-chain eligibility check into one shared job selector and use it from both engine entry points. The dashboard now defers a queued chained batch job while another job from that batch is active, matching headless `run` behavior and ensuring each job continues from its actual predecessor frame.
+
 ### Feature: audio-batch sticky per-segment .json config sidecars
 
 - **`ltxq.py`**: audio-segment batch composer (`add-batch`) automatically detects same-named `<stem>.json` sidecars (e.g. `One_0001.json`), validates them upfront as JSON objects with dimension/FPS guards, and applies them as sticky cumulative Config JSON overlays across subsequent segments until replaced by another `.json` sidecar.

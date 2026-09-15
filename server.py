@@ -233,9 +233,10 @@ def engine_loop():
                                    (h["alias"],)).fetchone()[0]
                 if busy >= h["max_jobs"]:
                     continue
-                job = con.execute("SELECT * FROM jobs WHERE status='queued' AND "
-                                  "(host IS NULL OR host=?) ORDER BY created_at, rowid LIMIT 1",
-                                  (h["alias"],)).fetchone()
+                # Keep the dashboard scheduler aligned with the headless
+                # dispatcher: batch-scoped chained jobs wait for active
+                # siblings, so their continuation frame is deterministic.
+                job = ltxq.next_dispatchable_job(con, h["alias"])
                 if job:
                     cur = con.execute("UPDATE jobs SET status='uploading', host=? "
                                       "WHERE id=? AND status='queued'", (h["alias"], job["id"]))
