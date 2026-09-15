@@ -397,6 +397,16 @@ def index():
     return r
 
 
+@app.get("/next")
+def index_next():
+    # dev preview of the in-progress composer shell; the stable UI at "/" stays
+    # frozen while static/index-next.html is built out slice by slice. Both
+    # URLs share the same API and queue, so /next is tested against real jobs.
+    r = flask.send_from_directory(STATIC, "index-next.html")
+    r.headers["Cache-Control"] = "no-cache"
+    return r
+
+
 @app.get("/api/state")
 def api_state():
     return flask.jsonify(**state_dict())
