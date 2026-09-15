@@ -2,6 +2,25 @@
 
 All notable changes, bug fixes, and feature additions to `ltxq` are documented here.
 
+## [Unreleased] - 2026-09-15
+
+### Feature: dashboard live updates via SSE with deduped polling
+
+- **`static/index.html`**: the dashboard now subscribes to the existing `/api/events` SSE bus (`hello` / `job` / `job_removed` / `host` / `engine` / `merge`) and triggers a ~250 ms debounced `/api/state` refetch per event, so queue changes land in a fraction of a second instead of waiting for the next 2 s tick. The poll loop remains as the fallback (2 s, stretching to 8 s while the stream is healthy) and covers any event types added later, but a state-signature dedupe makes it a no-op while nothing has changed — idle re-renders, and the focus/selection restore they had to perform, are gone. Client verified against the server's event names and the `hello` full-state bootstrap; EventSource auto-reconnect re-syncs from `hello`.
+
+### Fix: dashboard craft pass — secondary-text contrast, heading hierarchy, keyboard shortcuts
+
+- **`static/index.html`**: `--dim` lifted `#8b94a3` → `#9aa4b2` (small dim text moves from ~5.3:1 to ~6.5:1 against cards); the in-card "Frames from a finished video (ffmpeg)" heading demoted from a section-level `h2` to a styled `h3` so heading order is sane. ⌘/Ctrl+Enter now submits whichever form focus is in (native required-field validation still applies; fallback to a submit-button click for older Safari), and `/` jumps to the prompt with the caret at the end — ignored while typing in a field, while the settings overlay is open, or with modifiers. A small `⌘⏎ submit · / prompt` hint sits in the submit row.
+
+### Feature: composer shell preview at `/next` (slice 1 — tabbed shell, zero behavior change)
+
+- **`server.py`**: new `GET /next` serving `static/index-next.html` with the same `Cache-Control: no-cache` contract as `/`. The stable dashboard at `/` stays frozen as the daily driver while the next UI is developed side-by-side against the same API and queue — no mocks, no data migration, real jobs as the test bed.
+- **`static/index-next.html`**: the dashboard wrapped in a composer shell — a Single / Audio segments tab strip (roles `tablist`/`tab`/`tabpanel`, `aria-selected`, mode persisted in `localStorage` as `ltxq.mode`) toggles the two existing panels. Both forms keep their IDs, handlers, and FormData building untouched — slice 1 is purely structural, so `/next` behaves identically to `/`; the audio-batch explainer line is preserved inside its panel and the tab title carries an `(next)` marker. Verified by diffing against the stable file (only shell deltas), JS syntax check, and HTML tag-balance check; the later fix commits below are applied to both files.
+
+### Fix: one monoline SVG icon language across the dashboard
+
+- **`static/index.html`, `static/index-next.html`**: all emoji/text glyphs (➕ ⚙ ⏸ ▶ ↑ ↓ ✕ ✓ ✗ ⛓ 📦 🎵 📁) replaced with a monoline `currentColor` SVG set on a 24-grid, driven by a small `ICONS` helper in JS (static markup uses the same paths inline). Root cause for the report that started it: the History merge-add `+` and the settings gear rendered as dark emoji on dark secondary buttons — effectively invisible. Buttons are now `inline-flex` with icon+text gap, badges are inline-flex, status marks (`✓ present` / `✗ missing`, running/stopped) render inline with text, and icon-only buttons carry titles/aria-labels. A residual-glyph grep confirms only the `⌘⏎` shortcut hint remains — that's copy, not an icon. Verified via `node --check` on both files' scripts.
+
 ## [Unreleased] - 2026-09-07
 
 ### Feature: model-aware frame grids (Phase 1 — MiniMax H3 prep)
