@@ -22,6 +22,7 @@ Run:
 import importlib.util
 import json
 import os
+import sqlite3
 import sys
 import unittest
 from pathlib import Path
@@ -280,6 +281,75 @@ class RulebookTests(unittest.TestCase):
                                dialect="dtofficial")
         self.assertIn("$HOME/dt-cli generate --model m.ckpt", src)
 
+
+
+
+class NoteUnroutableTests(unittest.TestCase):
+    """Regression: ``note_unroutable`` does real SQL, so cover it directly.
+
+    The first version bound its LIKE parameter as ``(PREFIX + "%")`` — a str,
+    which sqlite3 expands into its characters ("uses 1, supplied 12") and blew
+    up the engine loop on every poll. Exercising the function, not just the
+    pure ``unroutable_jobs`` helper, is what catches that class of bug.
+    """
+
+    def setUp(self):
+        self.con = sqlite3.connect(":memory:")
+        self.con.row_factory = sqlite3.Row
+        self.con.executescript(ltxq.SCHEMA)
+        for ddl in ltxq.MIGRATIONS:
+            try:
+                self.con.execute(ddl)
+            except sqlite3.OperationalError:
+                pass
+        self.c = {"cli_dialect": "dtcustom"}
+
+    def _host(self, alias, dialect, backend="oneshot", enabled=1):
+        self.con.execute("INSERT INTO hosts(alias, cli_dialect, backend, "
+                         "enabled, max_jobs) VALUES(?,?,?,?,1)",
+                         (alias, dialect, backend, enabled))
+        self.con.commit()
+
+    def _job(self, jid, assets="[]", note=""):
+        self.con.execute(
+            "INSERT INTO jobs(id,created_at,name,status,model,prompt,"
+            "config_text,local_dir,assets,extra_args,ext,backend,note) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (jid, 0, "t", "queued", "m.ckpt", "p", "{}", "/nonexistent",
+             assets, "[]", "mov", "oneshot", note))
+        self.con.commit()
+
+    def _note(self, jid):
+        return self.con.execute("SELECT note FROM jobs WHERE id=?",
+                                (jid,)).fetchone()[0]
+
+    FRAMES = json.dumps([A("--first-frame", "a.png"), A("--last-frame", "b.png")])
+
+    def test_sets_then_clears_the_note_without_binding_error(self):
+        self._host("official", "dtofficial")
+        self._job("j1", self.FRAMES)
+        ltxq.note_unroutable(self.c, self.con)          # must not raise
+        first = self._note("j1")
+        self.assertTrue(first.startswith(ltxq.UNROUTABLE_PREFIX), first)
+        ltxq.note_unroutable(self.c, self.con)          # idempotent
+        self.assertEqual(self._note("j1"), first)
+        self.con.execute("UPDATE hosts SET cli_dialect='dtcustom' "
+                         "WHERE alias='official'")
+        self.con.commit()
+        ltxq.note_unroutable(self.c, self.con)          # routable again -> cleared
+        self.assertEqual(self._note("j1"), "")
+
+    def test_does_not_clobber_a_jobs_own_diagnostic_note(self):
+        self._host("official", "dtofficial")
+        self._job("j2", self.FRAMES, note="upload failed: boom")
+        ltxq.note_unroutable(self.c, self.con)
+        self.assertEqual(self._note("j2"), "upload failed: boom")
+
+    def test_routable_job_gets_no_note(self):
+        self._host("custom", "dtcustom")
+        self._job("j3", self.FRAMES)
+        ltxq.note_unroutable(self.c, self.con)
+        self.assertEqual(self._note("j3"), "")
 
 if __name__ == "__main__":
     unittest.main()

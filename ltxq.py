@@ -693,7 +693,7 @@ def note_unroutable(c, con):
         if note != text and (not note or note.startswith(UNROUTABLE_PREFIX)):
             set_job(con, jid, note=text)
     for row in con.execute("SELECT id, note FROM jobs WHERE status='queued' "
-                           "AND note LIKE ?", (UNROUTABLE_PREFIX + "%")).fetchall():
+                           "AND note LIKE ?", (UNROUTABLE_PREFIX + "%",)).fetchall():
         if row["id"] not in bad:
             set_job(con, row["id"], note="")
 
