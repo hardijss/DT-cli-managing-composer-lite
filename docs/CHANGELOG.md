@@ -55,6 +55,16 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
   ids (apart from `/next`'s tab/panel shell) and the same feature markers, so a
   feature added to one dashboard fails the suite until the other gets it.
 
+### Fix: host dropdown snapped back to "auto" in both dashboards
+
+- **`static/index.html`, `static/index-next.html`**: `loadModels()` rebuilt the
+  `#host` and `#bhost` `<select>` option lists on every call, and it is also the
+  `#host` `onchange` handler — assigning `.innerHTML` resets a `<select>` to its
+  first option, so picking a host immediately reverted to "auto". The lists are
+  now rebuilt by `syncHostOptions()`, which touches the DOM only when the option
+  set actually changed and re-selects the previous value afterwards. Present
+  since the initial commit; found in testing.
+
 ## [Unreleased] - 2026-09-15
 
 ### Feature: dashboard live updates via SSE with deduped polling

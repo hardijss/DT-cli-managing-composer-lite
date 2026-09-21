@@ -876,15 +876,31 @@ function connectEvents() {
 }
 connectEvents();
 
+// Rebuild the host <select>s ONLY when the option set actually changed, and
+// restore the current selection afterwards. Assigning .innerHTML always resets
+// a <select> to its first option, and this used to run on every loadModels()
+// call — including from the #host onchange handler — so picking a host snapped
+// straight back to "auto".
+function syncHostOptions(hosts) {
+  const want = '<option value="">auto (hosts.yaml order)</option>' +
+    hosts.map(h => `<option>${esc(h.alias)}</option>`).join("");
+  for (const id of ["host", "bhost"]) {
+    const sel = $(id);
+    if (sel.dataset.opts === want) continue;   // option set unchanged
+    const keep = sel.value;
+    sel.innerHTML = want;
+    sel.dataset.opts = want;
+    if (keep) sel.value = keep;                // no-op if that host vanished
+  }
+}
+
 async function loadModels(alias) {
   try {
     const st = await api("/api/state");
     if (!alias) {
       const h = st.hosts[0]; if (h) alias = h.alias;
     }
-    $("host").innerHTML = '<option value="">auto (hosts.yaml order)</option>' +
-      st.hosts.map(h => `<option>${esc(h.alias)}</option>`).join("");
-    $("bhost").innerHTML = $("host").innerHTML;
+    syncHostOptions(st.hosts);
   } catch (e) {}
   try {
     const m = await api("/api/models/" + (alias || "ltx-a"));

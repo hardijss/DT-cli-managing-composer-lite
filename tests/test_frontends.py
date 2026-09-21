@@ -63,6 +63,17 @@ class FrontendSyncTests(unittest.TestCase):
             self.assertIn(m, self.root, f"marker missing from index.html: {m!r}")
             self.assertIn(m, self.next, f"marker missing from index-next.html: {m!r}")
 
+    def test_host_select_is_not_rebuilt_on_every_change(self):
+        # Regression: loadModels() is the #host onchange handler and used to
+        # assign .innerHTML to the host <select>s right there. That resets a
+        # <select> to its first option, so picking a host snapped back to
+        # "auto". The rebuild must go through the guarded syncHostOptions().
+        for name, html in (("index.html", self.root),
+                           ("index-next.html", self.next)):
+            self.assertIn("syncHostOptions", html, name)
+            self.assertNotIn('$("host").innerHTML =', html,
+                             f"{name}: unguarded host <select> rebuild")
+
 
 if __name__ == "__main__":
     unittest.main()
