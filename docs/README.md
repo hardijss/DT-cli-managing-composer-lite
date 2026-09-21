@@ -10,7 +10,8 @@ Topic docs:
 - [api.md](api.md) — HTTP API contract (dashboard / macOS app / external clients)
 - [cli-mapping.md](cli-mapping.md) — how UI/API settings map onto the engine CLI's
   `generate` flags, the promotion policy for new engine arguments, and the
-  `ltxq flags` drift check (with committed snapshot [generate_flags.txt](generate_flags.txt))
+  `ltxq flags` per-dialect drift check (with committed snapshots
+  [generate_flags.dtcustom.txt](generate_flags.dtcustom.txt))
 - [environment.md](environment.md) — hosts.yaml keys, env vars, CLI flags
 - [features.md](features.md) — full feature list, known issues, TODOs
 - [decisions.md](decisions.md) — design decisions and rationale

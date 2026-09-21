@@ -1,0 +1,138 @@
+{
+ "oneshot": {
+  "bool-flips": "--model ltx-2.3-dev --config-file config.json --output out.mov --prompt-file prompt.txt --offline ",
+  "extras": "--model ltx-2.3-dev --config-file config.json --output out.mov --prompt-file prompt.txt --models-dir '$HOME/Models' --video-format hevc --no-download-missing --disable-preview --image a.png --seed 12345 --frames 121 --keyframe kf.png:12:0.8 --keyframe-strength 0.5 '~/abs.png' --prompt-relay 'x y'",
+  "extras-only": "--model m.ckpt --config-file config.json --output out.mov --prompt-file prompt.txt --no-download-missing --disable-preview --fflf-preflight",
+  "five-assets": "--model ltx-2.3-dev --config-file config.json --output out.mov --prompt-file prompt.txt --models-dir '$HOME/Models DT' --video-format hevc --no-download-missing --disable-preview --image 'start frame.png' --audio 'seg 1.wav' --first-frame f0.png --last-frame f121.png --input-video 'in vid.mov' --image 'quo'\"'\"'te.png' ",
+  "minimal": "--model ltx-2.3-dev --config-file config.json --output out.mov --prompt-file prompt.txt --no-download-missing --disable-preview ",
+  "models_dir+vf": "--model models/ltx-2.3-dev.ckpt --config-file config.json --output out.mov --prompt-file prompt.txt --models-dir '$HOME/Models DT' --video-format prores4444 --no-download-missing --disable-preview ",
+  "png-no-vf": "--model ltx-2.3-dev --config-file config.json --output out.png --prompt-file prompt.txt --models-dir '$HOME/Models' --no-download-missing --disable-preview ",
+  "vf-empty": "--model ltx-2.3-dev --config-file config.json --output out.mp4 --prompt-file prompt.txt --models-dir '$HOME/Models' --no-download-missing --disable-preview "
+ },
+ "serve": {
+  "full": {
+   "args": [
+    "--model",
+    "/Users/render/models/ltx-2.3-dev.ckpt",
+    "--config-file",
+    "/Users/render/genwork/jobs/abc123/config.json",
+    "--prompt-file",
+    "/Users/render/genwork/jobs/abc123/prompt.txt",
+    "--output",
+    "/Users/render/genwork/jobs/abc123/out.mov",
+    "--models-dir",
+    "/Users/render/Models DT",
+    "--video-format",
+    "hevc",
+    "--no-download-missing",
+    "--disable-preview",
+    "--image",
+    "/Users/render/genwork/jobs/abc123/a b.png",
+    "--audio",
+    "/Users/render/genwork/jobs/abc123/x.wav",
+    "--seed",
+    "7",
+    "--keyframe",
+    "/Users/render/genwork/jobs/abc123/kf.png:12:0.8",
+    "/Users/render/abs.png",
+    "--frames",
+    "121"
+   ],
+   "err": null,
+   "rd": "/Users/render/genwork/jobs/abc123"
+  },
+  "no-models-dir": {
+   "args": [
+    "--model",
+    "/Users/render/models/ltx-2.3-dev.ckpt",
+    "--config-file",
+    "/Users/render/genwork/jobs/abc123/config.json",
+    "--prompt-file",
+    "/Users/render/genwork/jobs/abc123/prompt.txt",
+    "--output",
+    "/Users/render/genwork/jobs/abc123/out.mp4",
+    "--video-format",
+    "hevc",
+    "--no-download-missing",
+    "--disable-preview",
+    "--offline",
+    "--image",
+    "/Users/render/genwork/jobs/abc123/a b.png",
+    "--audio",
+    "/Users/render/genwork/jobs/abc123/x.wav",
+    "--seed",
+    "7",
+    "--keyframe",
+    "/Users/render/genwork/jobs/abc123/kf.png:12:0.8",
+    "/Users/render/abs.png",
+    "--frames",
+    "121"
+   ],
+   "err": null,
+   "rd": "/Users/render/genwork/jobs/abc123"
+  },
+  "no-vf": {
+   "args": [
+    "--model",
+    "/Users/render/models/ltx-2.3-dev.ckpt",
+    "--config-file",
+    "/Users/render/genwork/jobs/abc123/config.json",
+    "--prompt-file",
+    "/Users/render/genwork/jobs/abc123/prompt.txt",
+    "--output",
+    "/Users/render/genwork/jobs/abc123/out.mov",
+    "--models-dir",
+    "/Users/render/Models DT",
+    "--no-download-missing",
+    "--disable-preview"
+   ],
+   "err": null,
+   "rd": "/Users/render/genwork/jobs/abc123"
+  },
+  "non-absolute": {
+   "args": [
+    "--model",
+    "relative/model.ckpt",
+    "--config-file",
+    "/genwork/jobs/bad1/config.json",
+    "--prompt-file",
+    "/genwork/jobs/bad1/prompt.txt",
+    "--output",
+    "/genwork/jobs/bad1/out.mov",
+    "--no-download-missing",
+    "--disable-preview"
+   ],
+   "err": null,
+   "rd": "/genwork/jobs/bad1"
+  },
+  "png": {
+   "args": [
+    "--model",
+    "/Users/render/models/ltx-2.3-dev.ckpt",
+    "--config-file",
+    "/Users/render/genwork/jobs/abc123/config.json",
+    "--prompt-file",
+    "/Users/render/genwork/jobs/abc123/prompt.txt",
+    "--output",
+    "/Users/render/genwork/jobs/abc123/out.png",
+    "--models-dir",
+    "/vol/Models",
+    "--no-download-missing",
+    "--disable-preview",
+    "--image",
+    "/Users/render/genwork/jobs/abc123/a b.png",
+    "--audio",
+    "/Users/render/genwork/jobs/abc123/x.wav",
+    "--seed",
+    "7",
+    "--keyframe",
+    "/Users/render/genwork/jobs/abc123/kf.png:12:0.8",
+    "/Users/render/abs.png",
+    "--frames",
+    "121"
+   ],
+   "err": null,
+   "rd": "/Users/render/genwork/jobs/abc123"
+  }
+ }
+}

@@ -236,7 +236,7 @@ def engine_loop():
                 # Keep the dashboard scheduler aligned with the headless
                 # dispatcher: batch-scoped chained jobs wait for active
                 # siblings, so their continuation frame is deterministic.
-                job = ltxq.next_dispatchable_job(con, h["alias"])
+                job = ltxq.next_dispatchable_job(con, h["alias"], c, h)
                 if job:
                     cur = con.execute("UPDATE jobs SET status='uploading', host=? "
                                       "WHERE id=? AND status='queued'", (h["alias"], job["id"]))
@@ -245,6 +245,8 @@ def engine_loop():
                         EVENTS.publish("job", {"job": jrow(con.execute(
                             "SELECT * FROM jobs WHERE id=?", (job["id"],)).fetchone())})
                         ltxq.launch(c, con, h, job)
+            # Surface queued jobs no enabled host's dialect can run.
+            ltxq.note_unroutable(c, con)
             try:
                 new_hosts = host_states(con)
                 if new_hosts != STATE["hosts"]:
@@ -285,6 +287,7 @@ def host_states(con):
             "SELECT COUNT(*) FROM jobs WHERE status='queued' AND "
             "(host IS NULL OR host=?)", (h["alias"],)).fetchone()[0]
         d["cli_path"] = ltxq.cli_of(ltxq.conf(), h)
+        d["cli_dialect"] = ltxq.dialect_of(ltxq.conf(), h)
         out[h["alias"]] = d
     return out
 
@@ -512,6 +515,8 @@ def api_status():
                 "models_dir": h["models_dir"], "conn": live.get("conn"),
                 "worker_alive": live.get("worker_alive"),
                 "cli_path": ltxq.cli_of(conf, h) if conf else h["cli_path"],
+                "cli_dialect": (ltxq.dialect_of(conf, h) if conf
+                                else (h["cli_dialect"] or ltxq.DEFAULT_DIALECT)),
             })
     templates = HERE / "templates"
     return flask.jsonify(

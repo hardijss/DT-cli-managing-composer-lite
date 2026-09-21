@@ -20,6 +20,7 @@ environment — that *is* the credentials mechanism (no passwords in yaml).
 | Key | Default | Purpose |
 |---|---|---|
 | `cli_path` | `~/tod-dt-cli` | draw-things-cli binary (overridable per host) |
+| `cli_dialect` | `dtcustom` | engine-CLI rulebook — *how* to speak to the binary (`dtcustom`, `dtofficial`; per-host overridable). See [cli-dialects.md](cli-dialects.md) |
 | `poll_secs` | `10` | engine loop cadence (poll, dispatch, idle checks) |
 | `stall_secs` | `900` | no-progress time before a job goes `suspect` |
 | `remote_root` | `genwork` | remote work root (worker + job dirs) |
@@ -43,6 +44,7 @@ environment — that *is* the credentials mechanism (no passwords in yaml).
 | `max_jobs` | `1` | concurrent in-flight jobs |
 | `models_dir` | probed | pinned models directory |
 | `cli_path` | global | per-host binary/version override |
+| `cli_dialect` | global | per-host dialect override (`dtcustom`, `dtofficial`) — a host can run a different engine CLI than the rest |
 | `video_format` | global | per-host codec override; set to `""` to omit `--video-format` entirely |
 | `ssh_opts` | `[]` | extra ssh options |
 | `mux` | `true` | use ControlMaster multiplexing |

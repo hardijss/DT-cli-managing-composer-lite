@@ -8,6 +8,14 @@ release. When a new engine argument appears, nothing in ltxq breaks and nothing
 needs to be written: the argument is already reachable, the only question is
 whether it deserves promotion to a first-class control.
 
+**Dialect scope.** Which engine CLI a host runs — and so which of these
+arguments exist there at all — is declared per host by `cli_dialect`
+(`dtcustom` = DrawOtherThings CustomCLI, `dtofficial` = upstream
+draw-things-cli). See [cli-dialects.md](cli-dialects.md). Anything the
+scheduler emits is looked up in that host's rulebook: a control or config key
+only one dialect supports is emitted only where it exists, and a job that needs
+it is routed to a capable host (or refused with a clear note).
+
 ## The four channels
 
 Every user-facing setting reaches `generate` through one of exactly four
@@ -68,7 +76,8 @@ it:
 `./venv/bin/python ltxq.py flags [alias ...] [--update]` runs
 `generate --help` on each enabled host (or the named ones) over the existing
 ssh/local transport, extracts the option list, and diffs it against the
-committed snapshot [generate_flags.txt](generate_flags.txt):
+committed snapshot for that dialect, `docs/generate_flags.<dialect>.txt`
+(e.g. [generate_flags.dtcustom.txt](generate_flags.dtcustom.txt)):
 
 - **new** — options the hosts report that the snapshot lacks (a new
   draw-things-cli release shipped something; re-run this doc's classification),

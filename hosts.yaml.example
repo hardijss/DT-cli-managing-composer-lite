@@ -1,4 +1,8 @@
 cli_path: ~/tod-dt-cli
+# Engine-CLI rulebook (global default): dtcustom (DrawOtherThings CustomCLI,
+# today's tod-dt-cli) or dtofficial (upstream draw-things-cli). It says how to
+# speak to the binary; `cli_path` says where it is. Override per host.
+cli_dialect: dtcustom
 poll_secs: 10
 stall_secs: 900
 remote_root: genwork
@@ -12,6 +16,9 @@ offline: false
 # the first enabled host with free capacity. List order = preference order.
 # Per-host cli_path overrides the global cli_path above (different binary or
 # version per machine); conn_type / models_dir / idle_policy are per-host too.
+# Per-host `cli_dialect` likewise overrides the global rulebook, e.g. an
+# upstream draw-things-cli host:
+#     cli_dialect: dtofficial   # no `serve` subcommand, no LTX asset flags
 hosts:
   # example remote render host — pre-disabled. Fill in dest / models_dir and
   # change enabled to true when you actually use this host. While it stays

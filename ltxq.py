@@ -71,15 +71,102 @@ SHUTDOWN = shlex.quote('{"command":"shutdown"}')
 # "  --download-missing/--no-download-missing". Prose wrapped to the same gutter
 # can false-positive, which is harmless for a drift check (one extra snapshot line).
 GENOPT = re.compile(r"^\s{2,8}(?:-[a-zA-Z],\s)?(--[A-Za-z0-9-/]+)", re.M)
-SNAP_FLAGS = HERE / "docs" / "generate_flags.txt"
 
-FLAGMAP = (("image", "--image"), ("audio", "--audio"), ("first_frame", "--first-frame"),
-           ("middle_frame", "--middle-frame"), ("last_frame", "--last-frame"),
-           ("input_video", "--input-video"))
-PATH_FLAGS = ("--config-file", "--prompt-file", "--output", "--image", "--audio",
-              "--first-frame", "--middle-frame", "--last-frame", "--input-video",
-              "--models-dir")
+# ------------------------------------------------------------------- dialects
+# Engine-CLI "rulebooks": which binary a host runs and how to speak to it. This
+# is reviewed DATA, not a plugin framework — no runtime capability probing (a
+# `--help` call must never decide what ltxq emits), no behavior hidden in code.
+#
+#   label     human name for notes/docs/UI
+#   serve     does the binary have the `serve` warm-worker subcommand?
+#   fflf_preflight  does it accept `generate ... --fflf-preflight`?
+#   flags     semantic name -> CLI spelling, for EVERY flag the scheduler itself
+#             emits. A semantic that is ABSENT is unsupported in that dialect:
+#             ltxq must route the job to a host whose dialect has it, or refuse
+#             it loudly — never emit a flag the binary does not know.
+#             (Asset semantics double as capability names; `image`/`audio`/...
+#             are the keys the gate looks up. Raw `extra_arg` tokens and
+#             `--keyframe*` are covered by the `keyframe` entry.)
+# See docs/cli-dialects.md; drift snapshots are per dialect
+# (docs/generate_flags.<dialect>.txt, `ltxq flags`).
+DIALECTS = {
+    "dtcustom": {
+        "label": "tod-dt-cli (DrawOtherThings CustomCLI)",
+        "generate_cmd": "generate",
+        "serve": True,
+        "fflf_preflight": True,
+        "flags": {
+            "model": "--model",
+            "config_file": "--config-file",
+            "prompt_file": "--prompt-file",
+            "output": "--output",
+            "models_dir": "--models-dir",
+            "video_format": "--video-format",
+            "no_download_missing": "--no-download-missing",
+            "disable_preview": "--disable-preview",
+            "offline": "--offline",
+            "seed": "--seed",
+            "frames": "--frames",
+            "image": "--image",
+            "audio": "--audio",
+            "first_frame": "--first-frame",
+            "middle_frame": "--middle-frame",
+            "last_frame": "--last-frame",
+            "input_video": "--input-video",
+            "keyframe": "--keyframe",
+        },
+    },
+    "dtofficial": {
+        "label": "draw-things-cli (upstream)",
+        "generate_cmd": "generate",
+        "serve": False,
+        "fflf_preflight": False,
+        # Shares most of the `generate` surface with dtcustom, but carries no
+        # LTX asset flags (--first/middle/last-frame, --input-video, --keyframe*)
+        # and no --fflf-preflight; its subcommands are generate/auth/models/
+        # train/completion (no serve).
+        "flags": {
+            "model": "--model",
+            "config_file": "--config-file",
+            "prompt_file": "--prompt-file",
+            "output": "--output",
+            "models_dir": "--models-dir",
+            "video_format": "--video-format",
+            "no_download_missing": "--no-download-missing",
+            "disable_preview": "--disable-preview",
+            "offline": "--offline",
+            "seed": "--seed",
+            "frames": "--frames",
+            "image": "--image",
+            "audio": "--audio",
+        },
+    },
+}
+DEFAULT_DIALECT = "dtcustom"
+
+# The six upload slots (semantic -> flag) in the DEFAULT dialect; the UI/API
+# form fields, `--chain` slots and regen all speak these semantic names.
+ASSET_SEMANTICS = ("image", "audio", "first_frame", "middle_frame", "last_frame",
+                   "input_video")
+FLAGMAP = tuple((s, DIALECTS[DEFAULT_DIALECT]["flags"][s]) for s in ASSET_SEMANTICS)
+# Semantics whose value is a filesystem path: the serve backend requires them
+# absolute (it hands the argv straight to a worker without a job-dir cwd).
+PATH_SEMANTICS = ("config_file", "prompt_file", "output", "image", "audio",
+                  "first_frame", "middle_frame", "last_frame", "input_video",
+                  "models_dir")
 FFLF_FLAGS = ("--first-frame", "--middle-frame", "--last-frame")
+
+
+class UnknownDialect(ValueError):
+    """hosts.yaml names a cli_dialect that DIALECTS does not define."""
+
+
+class UnsupportedFlag(ValueError):
+    """A dialect has no spelling for a flag the scheduler wanted to emit."""
+
+    def __init__(self, dialect, semantic):
+        self.dialect, self.semantic = dialect, semantic
+        super().__init__(f"dialect {dialect!r} has no flag for {semantic!r}")
 
 PROBE_SH = '''
 echo "HOME=$HOME"; echo "UNAME=$(uname -s)"
@@ -141,6 +228,7 @@ MIGRATIONS = ("ALTER TABLE jobs ADD COLUMN assets TEXT",
               "ALTER TABLE hosts ADD COLUMN ssh_opts TEXT",
               "ALTER TABLE hosts ADD COLUMN conn_type TEXT DEFAULT 'ssh'",
               "ALTER TABLE hosts ADD COLUMN cli_path TEXT",
+              "ALTER TABLE hosts ADD COLUMN cli_dialect TEXT",
               "ALTER TABLE hosts ADD COLUMN mux INT DEFAULT 1",
               "ALTER TABLE hosts ADD COLUMN video_format TEXT",
               "ALTER TABLE jobs ADD COLUMN chain TEXT",
@@ -155,11 +243,11 @@ date +%s > started_at
 run_cli() {{
   if [ "$USE_PTY" = "1" ]; then
     case "$(uname -s)" in
-      Darwin) script -q /dev/null {cli} generate {args} ;;
-      *)      script -qec "{cli} generate {args}" /dev/null ;;
+      Darwin) script -q /dev/null {cli} {generate} {args} ;;
+      *)      script -qec "{cli} {generate} {args}" /dev/null ;;
     esac
   else
-    {cli} generate {args}
+    {cli} {generate} {args}
   fi
 }}
 run_cli > log.txt 2>&1 &
@@ -188,7 +276,7 @@ def conf():
                      remote_root="genwork", movies_dir="~/Movies/generations",
                      use_pty=True, keep_remote=False, download_missing=False,
                      disable_preview=True, offline=False, video_format="hevc",
-                     hosts=[]).items():
+                     cli_dialect=DEFAULT_DIALECT, hosts=[]).items():
         c.setdefault(k, v)
     return c
 
@@ -212,20 +300,26 @@ def db():
     return con
 
 def sync_hosts(con):
-    hosts_cfg = conf()["hosts"]
+    c = conf()
+    hosts_cfg = c["hosts"]
     active_aliases = []
     for h in hosts_cfg:
         alias = h["alias"]
+        dialect_of(c, h)                     # fail loudly on an unknown cli_dialect
         active_aliases.append(alias)
         enabled = 0 if h.get("enabled") is False else 1
         con.execute("INSERT OR IGNORE INTO hosts(alias) VALUES(?)", (alias,))
+        # cli_dialect follows cli_path: hosts.yaml is authoritative, absence
+        # means NULL, and NULL resolves to DEFAULT_DIALECT at read time.
         con.execute("UPDATE hosts SET max_jobs=?, models_dir=COALESCE(?, models_dir), "
                     "dest=?, ssh_opts=?, mux=?, conn_type=?, cli_path=?, "
+                    "cli_dialect=?, "
                     "video_format=COALESCE(?, video_format), enabled=? WHERE alias=?",
                     (h.get("max_jobs", 1), h.get("models_dir"),
                      h.get("dest") or alias, json.dumps(h.get("ssh_opts", [])),
                      0 if h.get("mux") is False else 1,
                      h.get("conn_type", "ssh"), h.get("cli_path"),
+                     h.get("cli_dialect"),
                      h.get("video_format"), enabled, alias))
     if active_aliases:
         placeholders = ",".join("?" * len(active_aliases))
@@ -342,28 +436,85 @@ def resolve_extra(extra, rd=None):
         out.append(KFREF.sub(lambda m: (f"{rd}/{m.group(1)}" if rd else m.group(1)), t))
     return out
 
-def gen_args(model, assets, extra, c, ext, models_dir=None, video_format=None):
-    """The generate argument string shared by runner.sh and the dispatch-time
-    --fflf-preflight probe. Paths are job-dir-relative (runner.sh cds in)."""
-    args = (f"--model {shlex.quote(dollar_home(model))} "
-            f"--config-file config.json --output out.{ext} --prompt-file prompt.txt")
+def build_argv(model, assets, extra, c, ext, *, dialect=DEFAULT_DIALECT,
+               models_dir=None, video_format=None, rd=None, home=None):
+    """Dialect-aware `generate` tokens (binary and subcommand excluded).
+
+    Returns ``(tokens, extra_start)``: ``tokens[:extra_start]`` are the fixed
+    tokens (model/config/output/prompt, models-dir, video-format, the three
+    booleans, then the asset flags); ``tokens[extra_start:]`` are the resolved
+    ``extra_arg`` tokens. The split lets :func:`gen_args` reproduce the
+    historical oneshot byte shape, where an empty extras list still leaves one
+    trailing space.
+
+    ``rd is None`` -> oneshot shape: values are job-dir-relative and ``$HOME``
+    is preserved (runner.sh cds into the job dir). ``rd`` set -> serve shape:
+    values are resolved against the job dir and ``$HOME`` is expanded to
+    ``home``. NB the two backends have always emitted the config/output/prompt
+    block in different orders; that historical quirk is preserved byte for byte.
+
+    Raises :class:`UnsupportedFlag` when the dialect has no spelling for a flag
+    the scheduler must emit.
+    """
+    spec = dialect_spec(dialect)
+
+    def flag(semantic):
+        return spec_flag(spec, dialect, semantic)
+
+    def path(p):
+        p = dollar_home(p)
+        if rd is None:
+            return p
+        return p.replace("$HOME", home, 1) if home else p
+
+    def jobfile(name):
+        return name if rd is None else f"{rd}/{name}"
+
+    ext = ext or "mov"
+    if rd is None:                      # oneshot: model, cfg, out, prompt
+        order = (("model", path(model)), ("config_file", "config.json"),
+                 ("output", f"out.{ext}"), ("prompt_file", "prompt.txt"))
+    else:                               # serve: model, cfg, prompt, out
+        order = (("model", path(model)), ("config_file", "config.json"),
+                 ("prompt_file", "prompt.txt"), ("output", f"out.{ext}"))
+    toks = []
+    for sem, val in order:
+        toks += [flag(sem), val if sem == "model" else jobfile(val)]
     if models_dir:
-        args += f" --models-dir {shlex.quote(dollar_home(models_dir))}"
+        toks += [flag("models_dir"), path(models_dir)]
     if video_format and ext in ("mov", "mp4"):   # image output: flag meaningless
-        args += f" --video-format {shlex.quote(video_format)}"
-    if not c.get("download_missing"): args += " --no-download-missing"
-    if c.get("disable_preview"):      args += " --disable-preview"
-    if c.get("offline"):              args += " --offline"
+        toks += [flag("video_format"), video_format]
+    if not c.get("download_missing"): toks.append(flag("no_download_missing"))
+    if c.get("disable_preview"):      toks.append(flag("disable_preview"))
+    if c.get("offline"):              toks.append(flag("offline"))
     for a_ in assets:
-        if a_.get("flag"):
-            args += f" {a_['flag']} {shlex.quote(a_['file'])}"
-    args += " " + " ".join(shlex.quote(t) for t in resolve_extra(extra))
-    return args
+        f = a_.get("flag")
+        if not f:
+            continue
+        sem = _FLAG_SEMANTIC.get(f)
+        toks += [flag(sem) if sem else f, jobfile(a_["file"])]
+    extra_start = len(toks)
+    for t in resolve_extra(extra, rd):
+        if rd is not None and t.startswith("~/"):
+            t = (home or "") + t[1:]
+        toks.append(t)
+    return toks, extra_start
+
+def gen_args(model, assets, extra, c, ext, models_dir=None, video_format=None,
+             dialect=DEFAULT_DIALECT):
+    """The generate argument STRING shared by runner.sh and the dispatch-time
+    --fflf-preflight probe. Paths are job-dir-relative (runner.sh cds in)."""
+    toks, xstart = build_argv(model, assets, extra, c, ext, dialect=dialect,
+                              models_dir=models_dir, video_format=video_format)
+    s = " ".join(shlex.quote(t) for t in toks[:xstart])
+    s += " " + " ".join(shlex.quote(t) for t in toks[xstart:])
+    return s
 
 def make_runner(model, cli_path, use_pty, assets, extra, c, ext, models_dir=None,
-                video_format=None):
-    args = gen_args(model, assets, extra, c, ext, models_dir, video_format)
-    return RUNNER.format(pty=1 if use_pty else 0, cli=dollar_home(cli_path), args=args)
+                video_format=None, dialect=DEFAULT_DIALECT):
+    args = gen_args(model, assets, extra, c, ext, models_dir, video_format, dialect)
+    return RUNNER.format(pty=1 if use_pty else 0, cli=dollar_home(cli_path),
+                         generate=dialect_spec(dialect)["generate_cmd"], args=args)
 
 def upload(alias, rd, local_dir, names):
     if is_local(alias):
@@ -393,6 +544,158 @@ def video_format_of(c, h):
     """--video-format preset: global hosts.yaml default, per-host override.
     An explicit empty string on a host omits the flag entirely."""
     return h["video_format"] if h["video_format"] is not None else c.get("video_format")
+
+def _host_key(h, key):
+    """Row/dict-safe field access: sqlite3.Row misses raise IndexError, plain
+    dicts (hosts.yaml entries) raise KeyError."""
+    if h is None:
+        return None
+    try:
+        return h[key]
+    except (KeyError, IndexError):
+        return None
+
+def dialect_of(c, h):
+    """Engine-CLI dialect name for this host: per-host `cli_dialect` beats the
+    global `cli_dialect` key, which beats DEFAULT_DIALECT. `cli_path` (where
+    the binary is) is a SEPARATE axis — a host can point cli_path at a second
+    checkout of the same dialect, or keep the old path with a new dialect.
+    An empty string counts as "not set" (blanking the key). An unknown name
+    raises UnknownDialect naming the host and the value: no silent fallback."""
+    name = (_host_key(h, "cli_dialect")
+            or (c.get("cli_dialect") if c else None) or DEFAULT_DIALECT)
+    if name not in DIALECTS:
+        where = _host_key(h, "alias") or "global cli_dialect"
+        raise UnknownDialect(
+            f"unknown cli_dialect {name!r} for host {where!r} — known dialects: "
+            f"{', '.join(sorted(DIALECTS))} (fix hosts.yaml; see docs/cli-dialects.md)")
+    return name
+
+def dialect_spec(name):
+    if name not in DIALECTS:
+        raise UnknownDialect(f"unknown cli_dialect {name!r} — known dialects: "
+                             f"{', '.join(sorted(DIALECTS))}")
+    return DIALECTS[name]
+
+def dialect_has(spec, cap):
+    """Can this dialect satisfy capability `cap`? `cap` is a feature boolean
+    (`serve`, `fflf_preflight`) or a semantic flag name (an asset slot, or
+    `keyframe` for the raw --keyframe* family)."""
+    if cap in ("serve", "fflf_preflight"):
+        return bool(spec.get(cap))
+    return cap in spec["flags"]
+
+def spec_flag(spec, dialect, semantic):
+    """The dialect's spelling for a semantic flag, or UnsupportedFlag."""
+    spelling = spec["flags"].get(semantic)
+    if spelling is None:
+        raise UnsupportedFlag(dialect, semantic)
+    return spelling
+
+_FLAG_SEMANTIC = {f: s for s, f in FLAGMAP}      # default-dialect spellings only
+# Every dialect's spelling -> semantic: the serve backend validates that the
+# value after a path flag is absolute, whatever dialect spelled that flag.
+_ALL_FLAG_SEMANTIC = {f: s for spec in DIALECTS.values()
+                      for s, f in spec["flags"].items()}
+
+def extra_semantic(token):
+    """The capability a raw `extra_arg` token needs, or None when ltxq does not
+    recognize it (an unknown flag is the engine's business — the escape hatch
+    stays open). `--keyframe`, `--keyframe-strength`,
+    `--keyframe-attention-strength` and `--keyframe=...` all need `keyframe`."""
+    t = token.split("=", 1)[0]
+    if t.startswith("--keyframe"):
+        return "keyframe"
+    return _FLAG_SEMANTIC.get(t)
+
+def job_caps(job, host_backend=None):
+    """Capabilities a job needs from a host's dialect, derived from the job's
+    own data: a serve-backend job needs `serve`; every asset flag it carries
+    (and every recognized keyframe/asset token in extra_args) needs the
+    matching rulebook entry; a job carrying BOTH --first-frame and --last-frame
+    needs `fflf_preflight` (that is exactly when dispatch runs the probe).
+    `host_backend` is the host's default backend, which applies to jobs that
+    do not name one."""
+    caps = set()
+    if (job["backend"] or host_backend or "oneshot") == "serve":
+        caps.add("serve")
+    for a in json.loads(job["assets"] or "[]"):
+        sem = _FLAG_SEMANTIC.get(a.get("flag"))
+        if sem:
+            caps.add(sem)
+    for t in json.loads(job["extra_args"] or "[]"):
+        sem = extra_semantic(t)
+        if sem:
+            caps.add(sem)
+    if {"first_frame", "last_frame"} <= caps:
+        caps.add("fflf_preflight")
+    return caps
+
+def missing_caps(spec, caps):
+    """Sorted capability names this dialect cannot satisfy."""
+    return sorted(c_ for c_ in caps if not dialect_has(spec, c_))
+
+UNROUTABLE_PREFIX = "unroutable:"
+
+def unroutable_jobs(c, con):
+    """{job_id: note} for queued jobs no ENABLED host's dialect can run.
+
+    Capability only — a full host is not unroutable, just busy. Jobs pinned to
+    a host are judged against that host alone; unpinned jobs against every
+    enabled host. With no enabled host at all the map is empty (that is a
+    config state, not a per-job one)."""
+    specs = [(h, dialect_spec(dialect_of(c, h)))
+             for h in con.execute("SELECT * FROM hosts WHERE enabled=1").fetchall()]
+    out = {}
+    for job in con.execute("SELECT * FROM jobs WHERE status='queued'"):
+        cands = [(h, s) for h, s in specs if job["host"] in (None, h["alias"])]
+        if not cands:
+            continue
+        if any(not missing_caps(s, job_caps(job, h["backend"])) for h, s in cands):
+            continue
+        out[job["id"]] = _unroutable_note(job, cands)
+    return out
+
+def _unroutable_note(job, cands):
+    """Deterministic note: the job's own required capabilities plus, per
+    considered host, the capabilities its dialect lacks."""
+    need = sorted(job_caps(job, None)) or ["?"]
+    detail = []
+    for h, s in cands:
+        lacks = missing_caps(s, job_caps(job, h["backend"]))
+        detail.append(f"{h['alias']}={dialect_of_spec(s)} lacks {', '.join(lacks)}")
+    return (f"{UNROUTABLE_PREFIX} no enabled host dialect can run this job — needs "
+            + ", ".join(need) + "; " + "; ".join(detail))
+
+def dialect_of_spec(spec):
+    """The dialect name of a DIALECTS entry (reverse lookup for messages)."""
+    for name, s in DIALECTS.items():
+        if s is spec:
+            return name
+    return "?"
+
+def note_unroutable(c, con):
+    """Surface unroutable queued jobs in `note` without spamming it.
+
+    Writes only when the computed text differs from what is already stored, and
+    only into an empty note or a previous unroutable note — a job's own
+    diagnostic (upload failure, failed preflight) is never clobbered. Clears
+    the note again once the job becomes routable (hosts.yaml edited, host
+    re-enabled). Callers: dispatch() and the dashboard engine loop."""
+    try:
+        bad = unroutable_jobs(c, con)
+    except Exception as e:                      # never take the engine loop down
+        print("routing scan error:", repr(e))
+        return
+    for jid, text in bad.items():
+        row = con.execute("SELECT note FROM jobs WHERE id=?", (jid,)).fetchone()
+        note = (row["note"] or "") if row else ""
+        if note != text and (not note or note.startswith(UNROUTABLE_PREFIX)):
+            set_job(con, jid, note=text)
+    for row in con.execute("SELECT id, note FROM jobs WHERE status='queued' "
+                           "AND note LIKE ?", (UNROUTABLE_PREFIX + "%")).fetchall():
+        if row["id"] not in bad:
+            set_job(con, row["id"], note="")
 
 def probe(con, c, alias):
     hrow = con.execute("SELECT cli_path FROM hosts WHERE alias=?", (alias,)).fetchone()
@@ -436,18 +739,26 @@ def _worker_alive(h):
     return "ALIVE" in r.stdout
 
 
-def next_dispatchable_job(con, alias):
+def next_dispatchable_job(con, alias, c=None, h=None):
     """Return the oldest queued job eligible for ``alias``.
 
     A batch-scoped chained job must wait until every active sibling has
     finished.  That keeps its launch-time continuation frame deterministic
     when several hosts have free capacity.  Both engine entry points use this
     selector so the dashboard and headless scheduler follow the same rule.
+
+    When ``c``/``h`` are supplied, candidates this host's dialect cannot run
+    are skipped, so the host walk falls through to a capable host instead of
+    claiming a job it would only fail on.
     """
+    spec = (dialect_spec(dialect_of(c, h)) if (c is not None and h is not None)
+            else None)
     for cand in con.execute(
             "SELECT * FROM jobs WHERE status='queued' AND "
             "(host IS NULL OR host=?) ORDER BY created_at, rowid",
             (alias,)).fetchall():
+        if spec is not None and missing_caps(spec, job_caps(cand, h["backend"])):
+            continue
         if cand["chain"] and cand["batch"]:
             active = con.execute(
                 "SELECT COUNT(*) FROM jobs WHERE batch=? AND id!=? AND status IN "
@@ -466,15 +777,28 @@ def dispatch(c, con):
                            (h["alias"],)).fetchone()[0]
         if busy >= h["max_jobs"]:
             continue
-        job = next_dispatchable_job(con, h["alias"])
+        job = next_dispatchable_job(con, h["alias"], c, h)
         if job:
             cur = con.execute("UPDATE jobs SET status='uploading', host=? "
                               "WHERE id=? AND status='queued'", (h["alias"], job["id"]))
             con.commit()
             if cur.rowcount:
                 launch(c, con, h, job)
+    # Surface queued jobs no enabled host's dialect can run (non-spamming).
+    note_unroutable(c, con)
 
 def launch(c, con, h, job):
+    # Capability gate before any remote work: a job this host's dialect cannot
+    # run must never be uploaded only to fail in the engine CLI. dispatch()
+    # already routes around such hosts; reaching here means the job is pinned
+    # to this host (or hosts.yaml changed mid-flight) — fail loudly.
+    dialect = dialect_of(c, h)
+    need = missing_caps(dialect_spec(dialect), job_caps(job, h["backend"]))
+    if need:
+        set_job(con, job["id"], status="failed",
+                note=f"host '{h['alias']}' runs dialect {dialect!r}, which cannot "
+                     f"run this job — missing {', '.join(need)}")
+        return
     if not h["home"] or not h["models_dir"]:
         probe(con, c, h["alias"])
         h = con.execute("SELECT * FROM hosts WHERE alias=?", (h["alias"],)).fetchone()
@@ -495,7 +819,7 @@ def launch(c, con, h, job):
     vf = video_format_of(c, h)
     (Path(job["local_dir"]) / "runner.sh").write_text(make_runner(
         job["model"], cli_of(c, h), c["use_pty"], assets, extra, c, ext,
-        models_dir=h["models_dir"], video_format=vf))
+        models_dir=h["models_dir"], video_format=vf, dialect=dialect))
     names = ["runner.sh", "prompt.txt"]
     names.append("config.json" if (Path(job["local_dir"]) / "config.json").exists()
                  else "config.txt")
@@ -513,7 +837,7 @@ def launch(c, con, h, job):
     r = ssh(h["alias"], f"{cchk}{mdchk}echo CHKOK")
     if "NOCLI" in r.stdout:
         set_job(con, job["id"], status="queued",
-                note=f"tod-cli not found at {cli_of(c, h)} on host '{h['alias']}' "
+                note=f"engine CLI not found at {cli_of(c, h)} on host '{h['alias']}' "
                      "— check cli_path in hosts.yaml"); return
     if "NODMDIR" in r.stdout:
         set_job(con, job["id"], note=f"models dir missing on host (volume unmounted?) "
@@ -529,7 +853,8 @@ def launch(c, con, h, job):
     pf_note = ""
     if {"--first-frame", "--last-frame"} <= {a.get("flag") for a in assets}:
         pf = (f"cd {shlex.quote(rd)} && {shlex.quote(dollar_home(cli_of(c, h)))} "
-              f"generate {gen_args(job['model'], assets, extra, c, ext, models_dir=h['models_dir'], video_format=vf)} "
+              f"{dialect_spec(dialect)['generate_cmd']} "
+              f"{gen_args(job['model'], assets, extra, c, ext, models_dir=h['models_dir'], video_format=vf, dialect=dialect)} "
               f"--fflf-preflight")
         try:
             pr = ssh(h["alias"], pf, timeout=300)
@@ -550,28 +875,30 @@ def launch(c, con, h, job):
             backend="oneshot", remote_dir=rd,
             note=pf_note if ok else "launch failed: " + (r.stderr or r.stdout).strip()[:200])
 
-def serve_args(job, h, c):
+def serve_args(job, h, c, dialect=None):
+    """Serve-backend argv for a job: absolute paths, `$HOME` expanded, ready
+    for the newline-delimited JSON request. Built by the same dialect-aware
+    builder as oneshot, so both backends speak the host's dialect."""
     rd = f"{h['home']}/{c['remote_root']}/jobs/{job['id']}"
-    exp = lambda p: dollar_home(p).replace("$HOME", h["home"], 1) if p else p
-    args = ["--model", exp(job["model"]),
-            "--config-file", f"{rd}/config.json", "--prompt-file", f"{rd}/prompt.txt",
-            "--output", f"{rd}/out.{job['ext'] or 'mov'}"]
-    if h["models_dir"]: args += ["--models-dir", exp(h["models_dir"])]
-    vf = video_format_of(c, h)
-    if vf and (job["ext"] or "mov") in ("mov", "mp4"): args += ["--video-format", vf]
-    if not c.get("download_missing"): args.append("--no-download-missing")
-    if c.get("disable_preview"):      args.append("--disable-preview")
-    if c.get("offline"):              args.append("--offline")
-    for x in json.loads(job["assets"] or "[]"):
-        if x.get("flag"): args += [x["flag"], f"{rd}/{x['file']}"]
-    for t in resolve_extra(json.loads(job["extra_args"] or "[]"), rd):
-        args.append(h["home"] + t[1:] if t.startswith("~/") else t)
+    dialect = dialect or dialect_of(c, h)
+    args, _ = build_argv(job["model"], json.loads(job["assets"] or "[]"),
+                         json.loads(job["extra_args"] or "[]"), c,
+                         job["ext"] or "mov", dialect=dialect,
+                         models_dir=h["models_dir"],
+                         video_format=video_format_of(c, h),
+                         rd=rd, home=h["home"])
     bad = [args[i] for i in range(len(args) - 1)
-           if args[i] in PATH_FLAGS and not args[i + 1].startswith("/")]
+           if _ALL_FLAG_SEMANTIC.get(args[i]) in PATH_SEMANTICS
+           and not args[i + 1].startswith("/")]
     return rd, (None if bad else args), \
            ("non-absolute path for " + ", ".join(bad) if bad else None)
 
 def launch_serve(c, con, h, job):
+    if not dialect_has(dialect_spec(dialect_of(c, h)), "serve"):
+        set_job(con, job["id"], status="failed",
+                note=f"host '{h['alias']}' runs dialect {dialect_of(c, h)!r}, which "
+                     f"has no serve backend — run this job as oneshot instead")
+        return
     if not _worker_alive(h):
         set_job(con, job["id"], status="queued", note="serve worker not running — run: "
                                      "python3 ltxq.py serve-start " + h["alias"]); return
@@ -927,12 +1254,16 @@ def create_job(c, con, model, prompt, cfg_text, assets, extra, *, host=None,
         shutil.copyfile(src, d / src.name)
         rows.append({"flag": flag, "file": src.name, "local": str(src)})
     host_cli = c["cli_path"]
+    host_dialect = c.get("cli_dialect") or DEFAULT_DIALECT
     if host:
-        hr = con.execute("SELECT cli_path FROM hosts WHERE alias=?",
+        hr = con.execute("SELECT * FROM hosts WHERE alias=?",
                          (host,)).fetchone()
-        if hr and hr["cli_path"]: host_cli = hr["cli_path"]
+        if hr:
+            if hr["cli_path"]: host_cli = hr["cli_path"]
+            host_dialect = dialect_of(c, hr)
     (d / "runner.sh").write_text(make_runner(model, host_cli, c["use_pty"],
-                                             rows, extra, c, ext))
+                                             rows, extra, c, ext,
+                                             dialect=host_dialect))
     con.execute("INSERT INTO jobs(id,created_at,name,parent_id,host,model,prompt,"
                 "config_text,status,local_dir,pct_ts,assets,extra_args,num_frames,"
                 "fps,ext,backend,chain,batch) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -1511,10 +1842,20 @@ def _gen_flags(help_text):
         flags.update(p for p in m.group(1).split("/") if p.startswith("--"))
     return flags
 
+def _snap_path(dialect):
+    """Committed `generate --help` option snapshot for one dialect."""
+    return HERE / "docs" / f"generate_flags.{dialect}.txt"
+
 def cmd_flags(a):
-    """Drift check: run `generate --help` on each host, extract the option list,
-    and diff it against docs/generate_flags.txt so a new/removed draw-things-cli
-    argument surfaces without a manual audit. See docs/cli-mapping.md."""
+    """Per-dialect engine-CLI drift check.
+
+    Runs `generate --help` on each host over the existing transport, groups the
+    hosts by their `cli_dialect`, and diffs each dialect's option set against
+    its committed snapshot (`docs/generate_flags.<dialect>.txt`). Hosts on
+    DIFFERENT dialects are never reported as skew against each other — skew is
+    only meaningful within one dialect (an older binary of the same dialect).
+    Cross-dialect option differences are printed informationally. See
+    docs/cli-dialects.md."""
     con, c = db(), conf(); sync_hosts(con)
     rows = con.execute("SELECT * FROM hosts WHERE enabled=1").fetchall()
     if a.aliases:
@@ -1523,40 +1864,58 @@ def cmd_flags(a):
         if missing: sys.exit(f"no such enabled host(s): {', '.join(missing)}")
         rows = [byname[x] for x in a.aliases]
     if not rows: sys.exit("no enabled hosts")
-    seen = {}
+    by_dialect, unions = {}, {}
     for h in rows:
+        d = dialect_of(c, h)
         cli = shlex.quote(dollar_home(cli_of(c, h)))
-        r = ssh(h["alias"], f"{cli} generate --help", timeout=60)
+        r = ssh(h["alias"], f"{cli} {dialect_spec(d)['generate_cmd']} --help",
+                timeout=60)
         # the USAGE header distinguishes real help from a stub that ignores
         # --help and starts generating
         if r.returncode != 0 or "USAGE" not in r.stdout:
-            print(f"{h['alias']}: no help output ({r.stderr.strip()[:120] or 'empty'})")
+            print(f"{h['alias']} [{d}]: no help output "
+                  f"({r.stderr.strip()[:120] or 'empty'})")
             continue
-        seen[h["alias"]] = _gen_flags(r.stdout)
-        print(f"{h['alias']}: {len(seen[h['alias']])} options")
-    if not seen: sys.exit(1)
-    union = set().union(*seen.values())
-    for alias, fl in seen.items():
-        skew = union - fl
-        if skew: print(f"{alias}: host skew — missing {', '.join(sorted(skew))}")
-    snap = set()
-    if SNAP_FLAGS.exists():
-        snap = {l.strip() for l in SNAP_FLAGS.read_text().splitlines()
-                if l.strip() and not l.startswith("#")}
-    else:
-        print(f"note: no snapshot yet at {SNAP_FLAGS.relative_to(HERE)}")
-    new, gone = sorted(union - snap), sorted(snap - union)
-    for f in new:  print("NEW    ", f)
-    for f in gone: print("GONE   ", f)
-    if a.update:
-        SNAP_FLAGS.write_text(
-            "# draw-things-cli `generate --help` option snapshot for `ltxq flags`.\n"
-            "# One long option per line; combined --x/--no-x forms are stored split.\n"
-            f"# Updated {time.strftime('%Y-%m-%d')} from: {', '.join(sorted(seen))}\n"
-            + "\n".join(sorted(union)) + "\n")
-        print(f"snapshot updated: {SNAP_FLAGS.relative_to(HERE)} ({len(union)} options)")
-    drift = bool(new or gone or any(union - fl for fl in seen.values()))
-    print("flags:", "DRIFT" if drift else "in sync with snapshot")
+        fl = _gen_flags(r.stdout)
+        by_dialect.setdefault(d, {})[h["alias"]] = fl
+        print(f"{h['alias']} [{d}]: {len(fl)} options")
+    if not by_dialect: sys.exit(1)
+    drift = False
+    for d, hosts in sorted(by_dialect.items()):
+        union = set().union(*hosts.values())
+        unions[d] = union
+        for alias, fl in sorted(hosts.items()):
+            skew = union - fl
+            if skew:
+                print(f"{alias} [{d}]: host skew — missing {', '.join(sorted(skew))}")
+                drift = True
+        snap_path = _snap_path(d)
+        snap = set()
+        if snap_path.exists():
+            snap = {l.strip() for l in snap_path.read_text().splitlines()
+                    if l.strip() and not l.startswith("#")}
+        else:
+            print(f"note: no snapshot yet at {snap_path.relative_to(HERE)}")
+        new, gone = sorted(union - snap), sorted(snap - union)
+        for f in new:  print(f"[{d}] NEW    ", f)
+        for f in gone: print(f"[{d}] GONE   ", f)
+        drift = drift or bool(new or gone)
+        if a.update:
+            snap_path.write_text(
+                f"# {d} `generate --help` option snapshot for `ltxq flags`.\n"
+                "# One long option per line; combined --x/--no-x forms are stored split.\n"
+                f"# Updated {time.strftime('%Y-%m-%d')} from: "
+                f"{', '.join(sorted(hosts))}\n"
+                + "\n".join(sorted(union)) + "\n")
+            print(f"[{d}] snapshot updated: {snap_path.relative_to(HERE)} "
+                  f"({len(union)} options)")
+    if len(unions) > 1:
+        allf = set().union(*unions.values())
+        common = set.intersection(*unions.values())
+        diff = allf - common
+        print("cross-dialect (informational) — differs between dialects: "
+              + (", ".join(sorted(diff)) if diff else "none"))
+    print("flags:", "DRIFT" if drift else "in sync with snapshot(s)")
     sys.exit(1 if drift else 0)
 
 def cmd_ui(a):
@@ -1587,6 +1946,9 @@ def cmd_serve_start(a):
 
 def _cmd_serve_start(con, c, a):
     h = _models_dir(con, c, a.alias)
+    if not dialect_has(dialect_spec(dialect_of(c, h)), "serve"):
+        sys.exit(f"{a.alias}: dialect {dialect_of(c, h)!r} has no 'serve' subcommand "
+                 "— serve workers are unsupported on this host")
     if not h["home"]:
         probe(con, c, a.alias)
         h = con.execute("SELECT * FROM hosts WHERE alias=?", (a.alias,)).fetchone()

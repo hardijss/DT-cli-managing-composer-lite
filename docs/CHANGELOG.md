@@ -2,6 +2,49 @@
 
 All notable changes, bug fixes, and feature additions to `ltxq` are documented here.
 
+## [Unreleased] - 2026-09-21
+
+### Feature: per-host engine-CLI dialects (`cli_dialect`)
+
+- **`ltxq.py`**: the engine CLI is no longer assumed to be the DrawOtherThings
+  CustomCLI. A reviewed `DIALECTS` rulebook declares, per dialect, the generate
+  subcommand, whether `serve` and `--fflf-preflight` exist, and the spelling of
+  every flag the scheduler emits (`dtcustom`, the default and today's
+  `tod-dt-cli`; `dtofficial`, upstream `draw-things-cli`, which has no `serve`,
+  no LTX asset flags and no `--fflf-preflight`). `cli_path` (where the binary
+  is) and `cli_dialect` (how to speak to it) are separate axes; the dialect
+  resolves per-host > global > default, a new nullable `hosts.cli_dialect`
+  column carries it, and an unknown name fails loudly. The duplicated oneshot
+  (`gen_args`) and serve (`serve_args`) assembly is now one dialect-aware
+  `build_argv()`; both backends preserve their historical byte shape (including
+  the differing config/output/prompt order between them), pinned by goldens
+  generated from the pre-change source.
+- **Capability gate + routing**: each job derives the capabilities it needs
+  from its own data (serve backend → `serve`; each asset/`--keyframe*` token →
+  its rulebook entry; first *and* last frame → `fflf_preflight`).
+  `next_dispatchable_job()` now skips jobs a candidate host's dialect cannot
+  run, so the host walk falls through to a capable host; `launch()` re-checks
+  **before** any upload and fails a pinned/incapable job with a clear note;
+  `launch_serve()` and `serve-start` refuse a serve job on a serve-less
+  dialect. A queued job no enabled host can run gets a non-spamming
+  `unroutable: …` note, visible in `ltxq check` and the dashboard.
+- **`ltxq flags`** is now per dialect: snapshots are
+  `docs/generate_flags.<dialect>.txt` (the old file migrated to
+  `generate_flags.dtcustom.txt`); hosts on different dialects are no longer
+  reported as skew against each other, and cross-dialect differences are
+  printed informationally.
+- **`docs/cli-dialects.md`** (new) documents the rulebook, the binding, the
+  gate/routing rules, the drift workflow and how to add a third dialect;
+  `docs/environment.md` and `docs/cli-mapping.md` note the new key and its
+  dialect scope.
+- **`hosts.yaml` / `hosts.yaml.example`**: the global `cli_dialect: dtcustom`
+  is documented and the `dt-community` host is labelled `dtofficial`.
+- **`server.py` / `static/index.html`**: the resolved `cli_dialect` is exposed
+  in the host payload and shown in the host card and status table.
+- **`tests/test_dialects.py`** (new): byte-parity goldens for `dtcustom`
+  oneshot and serve output (generated from the pre-change source), plus
+  resolver-precedence, capability-gate and rulebook tests.
+
 ## [Unreleased] - 2026-09-15
 
 ### Feature: dashboard live updates via SSE with deduped polling
