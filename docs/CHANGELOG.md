@@ -45,6 +45,16 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
   oneshot and serve output (generated from the pre-change source), plus
   resolver-precedence, capability-gate and rulebook tests.
 
+### Fix: bring the `/next` dashboard back into feature sync
+
+- **`static/index-next.html`**: `/next` had drifted from `/` — it was missing the
+  host-card `cli_dialect` text and the **dialect** column in the settings host
+  table (both added with the dialect feature). The MiniMax-H3 frame-grid label
+  was already present (it predates the `/next` shell). `tests/test_frontends.py`
+  (new) now guards the sync: the two dashboards must expose the same element
+  ids (apart from `/next`'s tab/panel shell) and the same feature markers, so a
+  feature added to one dashboard fails the suite until the other gets it.
+
 ## [Unreleased] - 2026-09-15
 
 ### Feature: dashboard live updates via SSE with deduped polling

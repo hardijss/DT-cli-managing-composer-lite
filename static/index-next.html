@@ -367,7 +367,7 @@ function render(d) {
     if (h.in_flight !== undefined)
       live.push(`${h.in_flight} in flight${h.queued ? `, ${h.queued} queued` : ""}`);
     live.push(h.worker_alive ? "worker up" : "worker down");
-    const connInfo = `${esc(h.conn||"ssh")}${h.cli_path ? " · " + esc(h.cli_path) : ""}`;
+    const connInfo = `${esc(h.conn||"ssh")}${h.cli_path ? " · " + esc(h.cli_path) : ""}${h.cli_dialect ? " · " + esc(h.cli_dialect) : ""}`;
 
     let pausedBit = "";
     if (h.paused) {
@@ -1171,7 +1171,7 @@ async function loadStatus() {
       <div class="kv">${settings || '<div class="sub">none — hosts.yaml missing</div>'}</div>
       <h3>Hosts</h3>
       <table><thead><tr><th>alias</th><th>conn</th><th>backend</th>
-        <th>max jobs</th><th>worker</th><th>cli</th></tr></thead>
+        <th>max jobs</th><th>worker</th><th>cli</th><th>dialect</th></tr></thead>
       <tbody>${(s.hosts || []).map(h => `<tr>
         <td><b>${esc(h.alias)}</b>${h.enabled ? "" : ' <span class="badge">disabled</span>'}</td>
         <td>${esc(h.conn || "—")}</td>
@@ -1181,7 +1181,8 @@ async function loadStatus() {
               : h.worker_alive ? '<span class="st-ok">up</span>'
                                : '<span class="st-bad">down</span>'}</td>
         <td class="mono">${esc(h.cli_path || "—")}</td>
-      </tr>`).join("") || '<tr><td colspan="6" class="sub">none</td></tr>'}</tbody></table>`;
+        <td class="mono">${esc(h.cli_dialect || "—")}</td>
+      </tr>`).join("") || '<tr><td colspan="7" class="sub">none</td></tr>'}</tbody></table>`;
   } catch (e) {
     $("statusbody").innerHTML = `<div class="note st-bad">${esc(e.message)}</div>`;
   }
