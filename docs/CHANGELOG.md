@@ -81,6 +81,21 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
   unsupported there. The upstream `--avc` single-image constraint is noted as
   documented-but-unexercised.
 
+### Fix: a live job was marked failed when the log lacked a trailing newline
+
+- **`ltxq.py`**: the oneshot poll reply is parsed by `parse_poll()` now. Section
+  markers (`---E/P/L/A`) were emitted with a bare `echo`, so when the engine's
+  log ended *without* a trailing newline — which it does while a render is
+  running, progress lines use `\r` — the `---A` marker glued itself onto the
+  log's last line, the marker was never recognised, `alive` read as False, and
+  `poll_job` failed the job with "process gone, no exit_code (crash / host
+  reboot?)" while the engine was still working on the host. `POLL_CMD` now
+  emits every marker on its own line (`printf '\n---X\n'`), and `parse_poll`
+  falls back to a lenient split if a section is missing, so an already-glued
+  reply (or an older host) is still read correctly.
+- **`tests/test_poll.py`** (new): regression pinning the real captured shape
+  (glued marker + live pid → alive) plus well-formed, empty and dead replies.
+
 ## [Unreleased] - 2026-09-15
 
 ### Feature: dashboard live updates via SSE with deduped polling

@@ -275,10 +275,46 @@ echo $? > exit_code
 date +%s > finished_at
 """
 
-POLL_CMD = ('cd {rd} 2>/dev/null || {{ echo NODIR; exit 0; }}; echo ---E; '
-            'cat exit_code 2>/dev/null; echo ---P; cat cli_pid 2>/dev/null; echo ---L; '
-            'tail -c 4000 log.txt 2>/dev/null; echo ---A; '
+# Section markers are always put on a line of their own (printf '\n---X\n').
+# The engine's log can end WITHOUT a trailing newline (progress lines use \r),
+# and a bare `echo ---A` then glued itself to the log's last line — the marker
+# was never seen, `alive` defaulted to False, and a still-running job was marked
+# failed with "process gone, no exit_code".
+POLL_CMD = ('cd {rd} 2>/dev/null || {{ echo NODIR; exit 0; }}; '
+            'printf "\n---E\n"; cat exit_code 2>/dev/null; '
+            'printf "\n---P\n"; cat cli_pid 2>/dev/null; '
+            'printf "\n---L\n"; tail -c 4000 log.txt 2>/dev/null; '
+            'printf "\n---A\n"; '
             'kill -0 "$(cat cli_pid 2>/dev/null)" 2>/dev/null && echo alive || echo dead')
+
+POLL_MARKERS = "EPLA"
+
+
+def parse_poll(out):
+    """Split a POLL_CMD reply into (exit_code_line, log, alive).
+
+    Sections are marked by a line that is exactly '---E'/'---P'/'---L'/'---A'.
+    Parse strictly first; if a section is missing, fall back to a lenient split
+    on the markers wherever they appear. That fallback is what rescues replies
+    where a marker was glued to a log line lacking a trailing newline."""
+    parts, cur = {}, None
+    for line in out.splitlines():
+        if len(line) == 4 and line.startswith("---") and line[3] in POLL_MARKERS:
+            cur = line[3]
+            parts[cur] = []
+        elif cur is not None:
+            parts[cur].append(line)
+    if not {"A", "L"} <= set(parts):
+        parts, cur = {}, None
+        for i, chunk in enumerate(re.split(r"---([EPLA])(?:\r?\n|$)", out)):
+            if i % 2:
+                cur = chunk
+                parts.setdefault(cur, [])
+            elif cur is not None:
+                parts[cur].append(chunk)
+    return ("\n".join(parts.get("E", [])).strip(),
+            "\n".join(parts.get("L", [])),
+            "\n".join(parts.get("A", [])).strip() == "alive")
 
 HOSTDEST = {}                                   # alias -> (dest, extra_opts, mux)
 
@@ -966,17 +1002,9 @@ def poll_job(c, con, job):
     r = ssh(h["alias"], POLL_CMD.format(rd=shlex.quote(job["remote_dir"])))
     if r.returncode != 0:
         set_job(con, job["id"], note="poll ssh error: " + r.stderr.strip()[:200]); return
-    parts, cur = {}, None
-    for line in r.stdout.splitlines():
-        if len(line) == 4 and line.startswith("---") and line[3] in "EPLA":
-            cur = line[3]; parts[cur] = []
-        elif cur:
-            parts[cur].append(line)
     if "NODIR" in r.stdout:
         set_job(con, job["id"], note="remote job dir missing"); return
-    exit_s = "\n".join(parts.get("E", [])).strip()
-    log    = "\n".join(parts.get("L", []))
-    alive  = "\n".join(parts.get("A", [])).strip() == "alive"
+    exit_s, log, alive = parse_poll(r.stdout)
     now, upd = int(time.time()), {}
     m = PCT.findall(log)
     if m and min(int(m[-1]), 100) != job["pct"]:
