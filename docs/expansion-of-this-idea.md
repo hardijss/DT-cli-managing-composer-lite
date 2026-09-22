@@ -383,6 +383,114 @@ collection; only the re-encode fallback would contend for CPU.
 
 ---
 
+## Idea 7 — Optional path from a personal queue to unattended/shared operation
+
+**Status: design guardrails only — deliberately not a current product goal.**
+
+`ltxq` is intentionally a single-user, trusted-machine tool. Its localhost
+dashboard, SSH credentials, and direct access to the user's Movies folder are
+good trade-offs for that setting. This note records the small choices worth
+making now so a future “shared render appliance” does not require rewriting
+the queue; it does **not** propose exposing the current dashboard to a LAN or
+adding accounts prematurely.
+
+### Keep two futures distinct
+
+There are two materially different expansions, and choosing one should happen
+before implementing shared features:
+
+1. **Unattended personal queue** — still one trusted owner, but expected to
+   run for days and recover cleanly from restarts, host outages, and upgrades.
+2. **Shared queue** — multiple people or services submit work. This adds
+   identity, ownership, quotas, auditability, and an explicit network boundary;
+   it is not merely an unattended queue with a public URL.
+
+The first is a sensible incremental hardening path. The second should begin as
+a separately planned deployment mode, with its own threat model and operator.
+
+### Low-regret foundations to add while remaining single-user
+
+- **One scheduling source of truth.** Keep job eligibility and state
+  transitions in shared engine functions rather than copying queries between
+  the CLI and dashboard loops. The batch-chain selector now follows this
+  pattern; future policies (retries, priorities, host affinity) should do the
+  same.
+- **Executable lifecycle tests.** Add a small, fast SQLite-backed test suite
+  covering claim/dispatch, cancellation, collection retry, chain ordering,
+  restart recovery, and host-config reload. These tests are valuable even for
+  one person because render failures are expensive and often long-running.
+- **Explicit state transitions and attempt history.** Treat every job launch
+  as an attempt with a timestamp, selected host/backend, command version, and
+  terminal reason. Preserve prior attempts when retrying instead of replacing
+  a note string. This makes an overnight failure explainable without logging
+  into every host.
+- **Idempotent recovery.** On startup, reconcile an `uploading` or `running`
+  job against its remote manifest/pid/output before requeueing it. Use a
+  per-attempt token in the remote work directory so a delayed SSH command
+  cannot be mistaken for a newer attempt.
+- **Named operational limits.** Put retry budgets, collection retry cadence,
+  maximum queue length, maximum artifact age/size, and a host “offline after
+  N failures” threshold in configuration. Defaults can remain personal-tool
+  friendly; naming the limits early prevents implicit behavior from becoming
+  an accidental contract.
+- **Upgrade and backup discipline.** Version database migrations, offer a
+  pre-upgrade SQLite backup, and record the engine/API version in job
+  metadata. An unattended process needs a rollback story before it needs more
+  features.
+
+### If unattended personal operation becomes important
+
+Prioritize in this order:
+
+1. Structured local logs and a compact health summary (`last successful
+   dispatch`, `last collection`, hosts unreachable, jobs stuck by state).
+2. Bounded retries with exponential backoff for transport and collection
+   failures, never blindly retrying an uncertain remote render.
+3. Optional owner-selected notifications for meaningful events only: a failed
+   job after its retry budget, a host going offline, disk-space risk, or queue
+   completion. No routine “still running” noise.
+4. Periodic, non-destructive reconciliation that can report orphaned remote
+   directories, missing local artifacts, and stale workers; repair actions
+   should remain explicit.
+5. Retention controls for job inputs, logs, staging, and collected outputs,
+   with dry-run reporting before any new cleanup policy removes material.
+
+### Additional requirements before any shared deployment
+
+Do not bind the existing Flask app beyond loopback. A shared mode needs all of
+the following as a coherent package:
+
+- authenticated users or service identities, with job ownership recorded in
+  the database;
+- authorization rules for job data, inputs, logs, artifacts, host controls,
+  and destructive actions;
+- TLS and a deliberately operated ingress/reverse proxy, rather than Flask's
+  development server acting as an internet-facing service;
+- per-owner quotas and fair scheduling so one batch cannot consume every host;
+- immutable audit events for submission, cancellation, deletion, config
+  changes, and operator actions;
+- tenant-safe artifact storage and download URLs — never expose host paths or
+  let one user's cleanup remove another user's output;
+- secret management for render-host credentials, separate from application
+  configuration and never returned by diagnostics APIs.
+
+At that point, reassess the zero-footprint SSH model. It may remain suitable
+for a small trusted fleet, but a worker/agent protocol with authenticated
+heartbeats, capability reporting, and signed job manifests can be easier to
+operate at shared scale. That would be a new architecture decision, not a
+minor extension of `hosts.yaml`.
+
+### Decision triggers
+
+Revisit this idea when any of these becomes true: another person needs to
+submit or view jobs; the process must run unattended for more than a few days;
+render hosts are outside the owner's trusted network; or failures require
+regular manual database/SSH intervention. Until then, preserve the current
+single-user scope and choose the low-regret foundations only when they also
+improve the personal workflow.
+
+---
+
 ## Candidate backlog (one-liners, to be expanded when picked up)
 
 - **Idea 3 — Built-in segmenter**: the producer side of Idea 1 — ffprobe/ffmpeg
