@@ -617,12 +617,22 @@ def api_add():
         **{attr: None for attr, _ in ltxq.FLAGMAP},
         upload=[], extra_arg=[ea for ea in (f.get("extra_arg") or "").splitlines()
                               if ea.strip()])
+    # `image` is repeatable (order matters: first = primary/canvas image);
+    # every other slot stays single-valued.
+    uploaded_images = []
     for attr, _ in ltxq.FLAGMAP:
-        up = files.get(attr)
-        if up:
+        ups = files.getlist("image") if attr == "image" else [files.get(attr)]
+        saved = []
+        for up in ups:
+            if not up or not up.filename:
+                continue
             p = tmp / f"{int(time.time()*1000)}_{safe_upload_name(up.filename)}"
             up.save(p)
-            setattr(ns, attr, str(p))
+            saved.append(str(p))
+        if attr == "image":
+            uploaded_images = saved
+        elif saved:
+            setattr(ns, attr, saved[0])
     for up in files.getlist("upload"):
         p = tmp / f"{int(time.time()*1000)}_{safe_upload_name(up.filename)}"
         up.save(p)
@@ -643,7 +653,14 @@ def api_add():
         if v:
             ns.extra_arg += [flag, v]
     # ffmpeg-extracted frames staged earlier (/api/extract): slot -> staged name
-    for slot in ("image", "audio", "first_frame", "middle_frame", "last_frame", "input_video"):
+    # Staged images (Load / + media / copy media) come first, in staged order,
+    # so a Load round-trip keeps the original image order and the first image
+    # stays the canvas/primary one; freshly uploaded images follow. Every other
+    # slot still takes a single staged value, and only when it is empty.
+    staged_images = [str(STAGE / st) for st in f.getlist("staged_image")
+                     if _staged_ok(STAGE / st)]
+    ns.image = staged_images + uploaded_images
+    for slot in ("audio", "first_frame", "middle_frame", "last_frame", "input_video"):
         if getattr(ns, slot, None):
             continue
         st = f.get(f"staged_{slot}")

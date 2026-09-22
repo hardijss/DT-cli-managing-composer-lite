@@ -256,6 +256,38 @@ class CapabilityGateTests(unittest.TestCase):
         self.assertIn("--first-frame", toks)
 
 
+class MultiImageTests(unittest.TestCase):
+    """The `image` slot is repeatable and its order is significant."""
+
+    IMGS = [A("--image", "canvas.png"), A("--image", "ref1.png"),
+            A("--image", "ref2.png")]
+
+    def test_oneshot_emits_three_images_in_order(self):
+        s = ltxq.gen_args("m.ckpt", self.IMGS, [], C(), "mov")
+        self.assertEqual(s.count("--image"), 3)
+        pos = [s.index(n) for n in ("canvas.png", "ref1.png", "ref2.png")]
+        self.assertEqual(pos, sorted(pos), "image order must be preserved")
+
+    def test_serve_emits_three_images_in_order(self):
+        job = {"id": "abc123", "model": "/m/models/m.ckpt", "ext": "mov",
+               "assets": json.dumps(self.IMGS), "extra_args": NONE_J}
+        rd, args, err = ltxq.serve_args(job, _h(), C())
+        self.assertIsNone(err)
+        self.assertEqual(args.count("--image"), 3)
+        pos = [args.index(f"{rd}/{n}") for n in ("canvas.png", "ref1.png", "ref2.png")]
+        self.assertEqual(pos, sorted(pos), "image order must be preserved")
+
+    def test_single_image_unchanged(self):
+        s = ltxq.gen_args("m.ckpt", [A("--image", "one.png")], [], C(), "mov")
+        self.assertEqual(s.count("--image"), 1)
+
+    def test_images_precede_other_assets_and_extra_tokens(self):
+        assets = self.IMGS + [A("--audio", "a.wav")]
+        s = ltxq.gen_args("m.ckpt", assets, ["--seed", "1"], C(), "mov")
+        self.assertLess(s.index("canvas.png"), s.index("--audio a.wav"))
+        self.assertLess(s.index("ref2.png"), s.index("--seed"))
+
+
 class CapHintTests(unittest.TestCase):
     def test_dtofficial_frame_hint_teaches_the_model(self):
         hint = ltxq.missing_caps_hint("dtofficial", ["first_frame", "last_frame"])
