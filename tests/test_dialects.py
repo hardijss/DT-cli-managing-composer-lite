@@ -256,6 +256,30 @@ class CapabilityGateTests(unittest.TestCase):
         self.assertIn("--first-frame", toks)
 
 
+class CapHintTests(unittest.TestCase):
+    def test_dtofficial_frame_hint_teaches_the_model(self):
+        hint = ltxq.missing_caps_hint("dtofficial", ["first_frame", "last_frame"])
+        self.assertIn("canvas", hint)
+        self.assertIn("moodboard", hint)
+        self.assertIn("Image slot", hint)
+
+    def test_no_hint_when_the_dialect_supports_the_cap(self):
+        self.assertEqual(ltxq.missing_caps_hint("dtcustom", ["first_frame"]), "")
+        # dtofficial supports image/audio, so no hint for those
+        self.assertEqual(ltxq.missing_caps_hint("dtofficial", ["image"]), "")
+        self.assertEqual(ltxq.missing_caps_hint("nope", ["first_frame"]), "")
+
+    def test_launch_and_unroutable_notes_carry_the_hint(self):
+        note = ltxq._unroutable_note(
+            {"id": "j", "backend": None, "assets": json.dumps(
+                [A("--first-frame", "f0.png"), A("--last-frame", "f1.png")]),
+             "extra_args": "[]"},
+            [({"alias": "dt-community", "backend": "oneshot"},
+              ltxq.DIALECTS["dtofficial"])])
+        self.assertIn(ltxq.UNROUTABLE_PREFIX, note)
+        self.assertIn("moodboard", note)
+
+
 class RulebookTests(unittest.TestCase):
     def test_both_dialects_declare_the_owned_flags(self):
         owned = ("model", "config_file", "prompt_file", "output", "models_dir",

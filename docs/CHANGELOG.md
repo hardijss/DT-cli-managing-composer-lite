@@ -65,6 +65,22 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
   set actually changed and re-selects the previous value afterwards. Present
   since the initial commit; found in testing.
 
+### Docs/messaging: why `dtofficial` has no frame slots (canvas vs moodboard)
+
+- **`ltxq.py`**: dialect rulebooks may carry `cap_hints`; `missing_caps_hint()`
+  appends that guidance to refusal and `unroutable:` notes, so a blocked job
+  explains the dialect's model instead of only naming the missing capability.
+  `dtofficial` hints spell out that its first `--image` is the canvas image and
+  later `--image` args are moodboard references, pointing at the Image slot.
+- **`server.py` / dashboards**: hosts expose `frame_roles`; the New-job form
+  shows a hint by the frame/keyframe fields when the explicitly selected host
+  cannot express frame roles ("auto" stays silent — the effective host depends
+  on hosts.yaml order and capacity).
+- **`docs/cli-dialects.md`**: new "Frames vs canvas/moodboard" section recording
+  the upstream input model and why ltxq deliberately keeps the frame slots
+  unsupported there. The upstream `--avc` single-image constraint is noted as
+  documented-but-unexercised.
+
 ## [Unreleased] - 2026-09-15
 
 ### Feature: dashboard live updates via SSE with deduped polling

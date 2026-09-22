@@ -37,6 +37,35 @@ the binary does not know.
 Both dialects emit `generate` as the subcommand, so the runner template only
 takes its spelling from the rulebook.
 
+## Frames vs canvas/moodboard (why `dtofficial` has no frame slots)
+
+Upstream `draw-things-cli` has no `--first-frame` / `--middle-frame` /
+`--last-frame` / `--keyframe*`. Images are **canvas** features in Draw Things
+terms: there is no way to package them into `--config-file` / `--config-json`,
+and no persistent canvas or layers are exposed. Its `--image` is just
+repeatable:
+
+| Position | Meaning |
+|---|---|
+| `--image` #1 | `canvas_active` — the active canvas / primary input |
+| `--image` #2..n | moodboard members, in the order given — *references*, not endpoints |
+| `--avc` | accepts exactly one `--image` (documented upstream; never exercised by ltxq) |
+
+A frame slot therefore has **no** upstream destination: `--last-frame` /
+`--middle-frame` would become moodboard references, and
+`--keyframe path:index:strength` would lose the frame index and the strength.
+ltxq keeps them unsupported on `dtofficial` and refuses loudly (with the
+rulebook's `cap_hints` text explaining this) rather than passing a
+semantically wrong command that would run and succeed while not doing what was
+asked.
+
+The equivalent upstream affordance is the **Image slot**: `--image` #1 is the
+canvas image and any extra `image` assets are the ordered moodboard — which
+ltxq already maps 1:1 (its `--image` slot is repeatable). So a job that seeds a
+render on a `dtofficial` host should attach the image to *Image* (plus extra
+images), not to a frame slot. The frame/keyframe form fields show a hint when
+an explicitly selected host's dialect lacks frame roles.
+
 ## Binding
 
 `cli_dialect` resolves exactly like `cli_path` / `video_format`:

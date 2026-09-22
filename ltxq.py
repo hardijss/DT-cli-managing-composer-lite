@@ -89,6 +89,18 @@ GENOPT = re.compile(r"^\s{2,8}(?:-[a-zA-Z],\s)?(--[A-Za-z0-9-/]+)", re.M)
 #             `--keyframe*` are covered by the `keyframe` entry.)
 # See docs/cli-dialects.md; drift snapshots are per dialect
 # (docs/generate_flags.<dialect>.txt, `ltxq flags`).
+# Human guidance appended to refusal / unroutable notes when a capability is
+# missing. Rulebook data (see `cap_hints` in DIALECTS below) so the messaging
+# lives next to the dialect that owns the limitation.
+_DT_OFFICIAL_FRAMES = (
+    "dtofficial has no first/middle/last frames: its first --image is the canvas "
+    "image and every later --image is a moodboard reference (not an endpoint) — "
+    "attach the image to the Image slot (or extra images) instead, or send this "
+    "job to a dtcustom host")
+_DT_OFFICIAL_KEYFRAME = (
+    "dtofficial has no --keyframe (path:index:strength) — it would degrade to a "
+    "moodboard reference, losing the frame index and strength")
+
 DIALECTS = {
     "dtcustom": {
         "label": "tod-dt-cli (DrawOtherThings CustomCLI)",
@@ -121,6 +133,12 @@ DIALECTS = {
         "generate_cmd": "generate",
         "serve": False,
         "fflf_preflight": False,
+        "cap_hints": {
+            "first_frame": _DT_OFFICIAL_FRAMES,
+            "middle_frame": _DT_OFFICIAL_FRAMES,
+            "last_frame": _DT_OFFICIAL_FRAMES,
+            "keyframe": _DT_OFFICIAL_KEYFRAME,
+        },
         # Shares most of the `generate` surface with dtcustom, but carries no
         # LTX asset flags (--first/middle/last-frame, --input-video, --keyframe*)
         # and no --fflf-preflight; its subcommands are generate/auth/models/
@@ -635,6 +653,19 @@ def missing_caps(spec, caps):
     """Sorted capability names this dialect cannot satisfy."""
     return sorted(c_ for c_ in caps if not dialect_has(spec, c_))
 
+
+def missing_caps_hint(dialect, missing):
+    """Rulebook guidance for a capability gap, or "" — plain text, no separator.
+    Lets a refusal teach the dialect's model (e.g. canvas/moodboard) instead of
+    only naming what is absent."""
+    hints = (DIALECTS.get(dialect) or {}).get("cap_hints") or {}
+    out = []
+    for cap in missing:
+        h = hints.get(cap)
+        if h and h not in out:
+            out.append(h)
+    return " ".join(out)
+
 UNROUTABLE_PREFIX = "unroutable:"
 
 def unroutable_jobs(c, con):
@@ -660,12 +691,17 @@ def _unroutable_note(job, cands):
     """Deterministic note: the job's own required capabilities plus, per
     considered host, the capabilities its dialect lacks."""
     need = sorted(job_caps(job, None)) or ["?"]
-    detail = []
+    detail, hints = [], []
     for h, s in cands:
         lacks = missing_caps(s, job_caps(job, h["backend"]))
-        detail.append(f"{h['alias']}={dialect_of_spec(s)} lacks {', '.join(lacks)}")
+        d = dialect_of_spec(s)
+        detail.append(f"{h['alias']}={d} lacks {', '.join(lacks)}")
+        hint = missing_caps_hint(d, lacks)
+        if hint and hint not in hints:
+            hints.append(hint)
+    tail = (" — " + " ".join(hints)) if hints else ""
     return (f"{UNROUTABLE_PREFIX} no enabled host dialect can run this job — needs "
-            + ", ".join(need) + "; " + "; ".join(detail))
+            + ", ".join(need) + "; " + "; ".join(detail) + tail)
 
 def dialect_of_spec(spec):
     """The dialect name of a DIALECTS entry (reverse lookup for messages)."""
@@ -795,9 +831,11 @@ def launch(c, con, h, job):
     dialect = dialect_of(c, h)
     need = missing_caps(dialect_spec(dialect), job_caps(job, h["backend"]))
     if need:
+        hint = missing_caps_hint(dialect, need)
         set_job(con, job["id"], status="failed",
                 note=f"host '{h['alias']}' runs dialect {dialect!r}, which cannot "
-                     f"run this job — missing {', '.join(need)}")
+                     f"run this job — missing {', '.join(need)}"
+                     + (f" — {hint}" if hint else ""))
         return
     if not h["home"] or not h["models_dir"]:
         probe(con, c, h["alias"])

@@ -172,6 +172,7 @@ a { color:var(--acc); text-decoration:none; }
     <label>LTX keyframes — image + index (frame number), optional strength:attention
       (e.g. <span class="mono">12</span> or <span class="mono">12:0.8:1.0</span>)</label>
     <div id="keyframes"></div>
+    <div id="framehint" class="note" hidden></div>
     <div class="row" style="margin:6px 0">
       <button type="button" class="sec" id="addkf">+ keyframe</button>
       <span class="sub">default strengths:</span>
@@ -857,7 +858,30 @@ $("mergeRun").onclick = async () => {
 // disappear, and the poll stretches to 8 s while the stream is healthy.
 let lastSig = null, sseLive = false, refreshTimer = null, lastPoll = 0;
 
+let lastHosts = [];
+// Explain a dialect's frame limitation next to the frame/keyframe fields, but
+// only when the EXPLICITLY selected host cannot express frame roles. "auto"
+// shows nothing: the effective host depends on hosts.yaml order + capacity.
+function updateDialectHint() {
+  const el = $("framehint");
+  if (!el) return;
+  const alias = $("host").value;
+  const h = alias ? lastHosts.find(x => x.alias === alias) : null;
+  const msg = (h && h.frame_roles === false)
+    ? `${alias} (dialect ${h.cli_dialect}) has no first/middle/last-frame or `
+      + `--keyframe: its first --image is the canvas image and later --image args `
+      + `are moodboard references. Use the Image slot (or extra images), or pick a `
+      + `host whose dialect supports frames.`
+    : "";
+  if (el.dataset.msg === msg) return;
+  el.dataset.msg = msg;
+  el.hidden = !msg;
+  el.textContent = msg;
+}
+
 function renderState(d) {
+  lastHosts = d.hosts || [];
+  updateDialectHint();
   const sig = JSON.stringify(d);
   if (sig === lastSig) return;
   lastSig = sig;
@@ -916,6 +940,7 @@ async function loadModels(alias) {
       const h = st.hosts[0]; if (h) alias = h.alias;
     }
     syncHostOptions(st.hosts);
+    lastHosts = st.hosts || []; updateDialectHint();
   } catch (e) {}
   try {
     const m = await api("/api/models/" + (alias || "ltx-a"));
@@ -928,7 +953,7 @@ async function loadModels(alias) {
   } catch (e) { $("addmsg").textContent = e.message; }
 }
 loadModels();
-$("host").onchange = () => loadModels($("host").value);
+$("host").onchange = () => { updateDialectHint(); loadModels($("host").value); };
 
 $("lastcfg").onclick = async () => {
   try {

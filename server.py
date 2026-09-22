@@ -288,6 +288,8 @@ def host_states(con):
             "(host IS NULL OR host=?)", (h["alias"],)).fetchone()[0]
         d["cli_path"] = ltxq.cli_of(ltxq.conf(), h)
         d["cli_dialect"] = ltxq.dialect_of(ltxq.conf(), h)
+        d["frame_roles"] = ltxq.dialect_has(
+            ltxq.dialect_spec(d["cli_dialect"]), "first_frame")
         out[h["alias"]] = d
     return out
 
@@ -517,6 +519,8 @@ def api_status():
                 "cli_path": ltxq.cli_of(conf, h) if conf else h["cli_path"],
                 "cli_dialect": (ltxq.dialect_of(conf, h) if conf
                                 else (h["cli_dialect"] or ltxq.DEFAULT_DIALECT)),
+                "frame_roles": (ltxq.dialect_has(ltxq.dialect_spec(
+                    ltxq.dialect_of(conf, h)), "first_frame") if conf else None),
             })
     templates = HERE / "templates"
     return flask.jsonify(
