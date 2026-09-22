@@ -1353,8 +1353,10 @@ def _cmd_add(c, con, a):
     cfg_text, obj = _load_cfg(c, con, a.model, a.config_file, a.config_json)
     assets = []
     for attr, flag in FLAGMAP:
-        p = getattr(a, attr, None)
-        if p: assets.append((flag, p))
+        v = getattr(a, attr, None)
+        # `image` is the one multi-valued slot: repeatable --image, order kept
+        for p in (v if isinstance(v, (list, tuple)) else [v]):
+            if p: assets.append((flag, p))
     for p in a.upload or []:
         assets.append((None, p))
     extra = []
@@ -1683,6 +1685,7 @@ def _cmd_regen(con, a):
                             upload=[],
                             extra_arg=[" ".join([t]) for t in extra])
     for k, _ in FLAGMAP: setattr(ns, k, None)
+    ns.image = []              # the multi-valued slot: keep every image, in order
     for x in json.loads(p["assets"] or "[]"):
         fpath = pd / x["file"]
         if not fpath.exists(): continue
@@ -1691,7 +1694,10 @@ def _cmd_regen(con, a):
         if flg:
             for attr, f in FLAGMAP:
                 if f == flg:
-                    setattr(ns, attr, str(fpath))
+                    if attr == "image":
+                        ns.image.append(str(fpath))
+                    else:
+                        setattr(ns, attr, str(fpath))
                     matched = True
                     break
         if not matched:
@@ -2089,7 +2095,11 @@ def main():
                         "(overrides the config's numFrames)")
     g.add_argument("--ext", default="mov", choices=["mov", "mp4", "png"])
     g.add_argument("--backend", choices=["oneshot", "serve"])
-    for f in ("--image", "--audio", "--first-frame", "--middle-frame",
+    g.add_argument("--image", action="append", default=[],
+                   help="input image; repeat for extra reference images — order "
+                        "matters (the first is the primary/canvas image and later "
+                        "ones are ordered references)")
+    for f in ("--audio", "--first-frame", "--middle-frame",
               "--last-frame", "--input-video"):
         g.add_argument(f)
     g.add_argument("--upload", action="append", default=[])
@@ -2153,7 +2163,8 @@ def main():
     g.add_argument("--allow-download", action="store_true")
     g = sp.add_parser("check"); g.add_argument("id"); g.add_argument("--host")
     g = sp.add_parser("flags", help="diff each host's engine-CLI generate options "
-                                    "against docs/generate_flags.txt")
+                                    "against its dialect's snapshot "
+                                    "(docs/generate_flags.<dialect>.txt)")
     g.add_argument("aliases", nargs="*")
     g.add_argument("--update", action="store_true",
                    help="rewrite the snapshot from what the hosts report")

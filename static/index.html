@@ -146,7 +146,8 @@ a { color:var(--acc); text-decoration:none; }
       </div>
     </div>
     <div class="grid">
-      <div><label>Image (--image)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="image"><input type="file" id="image" accept="image/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="image" title="clear selected file" hidden><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div></div>
+      <div><label>Image (--image)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="image"><input type="file" id="image" accept="image/*" multiple><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="image" title="clear selected file" hidden><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+          <div id="imagechips" class="row" style="flex-wrap:wrap;gap:6px;margin:4px 0" hidden></div></div>
       <div><label>Audio (--audio)</label><div class="filerow"><label class="filedrop" tabindex="0" data-dz="audio"><input type="file" id="audio" accept="audio/*"><img class="dz-thumb" alt=""><span class="dz-label"></span></label><button type="button" class="sec" data-clear="audio" title="clear selected file" hidden><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div></div>
     </div>
     <div class="grid">
@@ -707,9 +708,50 @@ function dzSync(dz) {
   if (thumb.src) { URL.revokeObjectURL(thumb.src); thumb.src = ""; }
   if (f && f.type.startsWith("image/")) thumb.src = URL.createObjectURL(f);
 }
+// ---- multi-image: the Image slot is an ordered list ---------------------
+// The engine's --image is repeatable and order matters (first = primary/canvas
+// image, later ones = ordered references), so the Image dropzone keeps an
+// ordered File list and submits one `image` part per file, in this order.
+let imageFiles = [];
+
+function imageSync() {
+  const dz = document.querySelector('[data-dz="image"]');
+  const inp = $("image");
+  try {
+    const dt = new DataTransfer();
+    imageFiles.forEach(f => dt.items.add(f));
+    inp.files = dt.files;
+  } catch (e) { /* no DataTransfer: chips still submit via imageFiles */ }
+  dz.classList.toggle("filled", imageFiles.length > 0);
+  dz.querySelector(".dz-label").textContent = imageFiles.length
+    ? (imageFiles.length === 1 ? imageFiles[0].name : imageFiles.length + " images")
+    : "drop, paste, or click to browse";
+  const thumb = dz.querySelector(".dz-thumb");
+  if (thumb.src) { URL.revokeObjectURL(thumb.src); thumb.src = ""; }
+  const first = imageFiles.find(f => (f.type || "").startsWith("image/"));
+  if (first) thumb.src = URL.createObjectURL(first);
+  const clr = document.querySelector('[data-clear="image"]');
+  if (clr) clr.hidden = !imageFiles.length;
+  const box = $("imagechips");
+  if (box) {
+    box.hidden = !imageFiles.length;
+    box.innerHTML = imageFiles.map((f, i) =>
+      `<span class="badge" style="display:inline-flex;align-items:center;gap:6px">`
+      + `${esc(f.name)}<button type="button" class="sec" data-imgdrop="${i}" `
+      + `title="remove this image">${ICONS.x}</button></span>`).join("");
+    box.querySelectorAll("[data-imgdrop]").forEach(b =>
+      b.onclick = () => { imageFiles.splice(+b.dataset.imgdrop, 1); imageSync(); });
+  }
+}
+
 function setDzFile(dz, f) {
   if (!acceptsFile(dz, f))
     return flash(`${f.name || "clipboard"}: wrong file type for ${dzName(dz)}`, true);
+  if (dz.dataset.dz === "image") {          // multi-image: append, keep order
+    imageFiles.push(f);
+    imageSync();
+    return;
+  }
   const inp = dz.querySelector("input[type=file]");
   const dt = new DataTransfer(); dt.items.add(f);
   inp.files = dt.files;
@@ -738,9 +780,23 @@ function wireDropzone(dz) {
     dz.classList.remove("over");
     if (!e.dataTransfer.files.length) return;   // ignore non-file drags
     e.preventDefault();
-    setDzFile(dz, e.dataTransfer.files[0]);
+    if (dz.dataset.dz === "image")              // multi-image: all of them, in order
+      for (const f of e.dataTransfer.files) setDzFile(dz, f);
+    else
+      setDzFile(dz, e.dataTransfer.files[0]);
   });
-  inp.addEventListener("change", () => dzSync(dz));
+  inp.addEventListener("change", () => {
+    if (dz.dataset.dz === "image") {            // multi-select: merge, no dupes
+      for (const f of inp.files)
+        if (acceptsFile(dz, f) &&
+            !imageFiles.some(x => x.name === f.name && x.size === f.size &&
+                                  x.lastModified === f.lastModified))
+          imageFiles.push(f);
+      imageSync();
+      return;
+    }
+    dzSync(dz);
+  });
   dzSync(dz);
 }
 document.addEventListener("paste", ev => {
@@ -752,7 +808,10 @@ document.addEventListener("paste", ev => {
   const dz = (pasteTarget && document.contains(pasteTarget)) ? pasteTarget
            : document.querySelector('[data-dz="image"]');
   ev.preventDefault();
-  setDzFile(dz, files[0]);
+  if (dz.dataset.dz === "image")
+    for (const f of files) setDzFile(dz, f);
+  else
+    setDzFile(dz, files[0]);
 });
 
 function addKfRow() {
@@ -777,12 +836,15 @@ for (const id of SLOTS) {
   const inp = $(id), dz = document.querySelector(`[data-dz="${id}"]`);
   const clr = document.querySelector(`[data-clear="${id}"]`);
   wireDropzone(dz);
-  const sync = () => { clr.hidden = !inp.files.length; };
+  const isImg = id === "image";
+  const sync = () => { clr.hidden = !(isImg ? imageFiles.length : inp.files.length); };
   inp.addEventListener("change", sync);
   clr.onclick = () => {
     inp.value = "";
     inp.files = new DataTransfer().files;
-    dzSync(dz); sync();
+    if (isImg) { imageFiles = []; imageSync(); }
+    else dzSync(dz);
+    sync();
   };
 }
 pasteTarget = document.querySelector('[data-dz="image"]');
@@ -972,7 +1034,9 @@ $("addform").onsubmit = async ev => {
   if ($("backend").value) fd.set("backend", $("backend").value);
   if ($("host").value)    fd.set("host", $("host").value);
   fd.set("ext", $("ext").value);
-  for (const id of ["image", "audio", "input_video", "first_frame", "middle_frame",
+  // `image` is repeatable and order matters: one part per file, in order
+  imageFiles.forEach(f => fd.append("image", f));
+  for (const id of ["audio", "input_video", "first_frame", "middle_frame",
                     "last_frame"])
     if ($(id).files[0]) fd.set(id, $(id).files[0]);
   const kfRows = [...document.querySelectorAll("#keyframes .row")];
@@ -990,6 +1054,8 @@ $("addform").onsubmit = async ev => {
       fd.set("keyframe_index", s.index || "0");
     } else if (s.slot === "upload") {
       fd.append("staged_upload", s.name);
+    } else if (s.slot === "image") {         // repeatable; staged order preserved
+      fd.append("staged_image", s.name);
     } else fd.set("staged_" + s.slot, s.name);
   }
   try {

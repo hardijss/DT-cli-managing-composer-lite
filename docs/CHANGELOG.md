@@ -81,6 +81,26 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
   unsupported there. The upstream `--avc` single-image constraint is noted as
   documented-but-unexercised.
 
+### Feature: multiple `--image` (canvas + ordered references)
+
+- **`ltxq.py`**: `add --image` is repeatable. `image` is the one multi-valued
+  slot; `audio` / `first_frame` / `middle_frame` / `last_frame` / `input_video`
+  stay single. `_cmd_add` accepts a list-or-scalar per slot and `_cmd_regen`
+  rebuilds every image of a job in order instead of keeping only the last.
+- **`server.py`**: `/api/add` accepts repeated `image` parts
+  (`files.getlist`) and repeated `staged_image` values. Staged images (History
+  Load, "+ media", copy media) are placed first, in staged order, so a Load
+  round-trip keeps the original image order and the first image stays the
+  primary/canvas one; freshly uploaded images follow.
+- **`static/index.html`, `static/index-next.html`**: the Image dropzone accepts
+  multiple files (multi-select, multi-file drag, paste), shows one removable
+  chip per file in order, submits one `image` part per file in that order, and
+  its clear button empties the whole list. The other five slots are unchanged.
+- Ordering is significant: with the upstream dialect the first `--image` is the
+  canvas/primary image and later ones are ordered moodboard references.
+- **`tests/test_dialects.py`**: ordering/parity coverage for a 3-image job
+  (oneshot and serve), single-image unchanged, images before other assets.
+
 ### Fix: a live job was marked failed when the log lacked a trailing newline
 
 - **`ltxq.py`**: the oneshot poll reply is parsed by `parse_poll()` now. Section
