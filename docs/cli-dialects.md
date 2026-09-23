@@ -66,6 +66,31 @@ render on a `dtofficial` host should attach the image to *Image* (plus extra
 images), not to a frame slot. The frame/keyframe form fields show a hint when
 an explicitly selected host's dialect lacks frame roles.
 
+## Frame-count validation (strict vs rounding)
+
+The two dialects treat a `--frames` count that is off the selected model's grid
+differently. This matters before frame handling is promoted into shared code:
+
+| Dialect | `--frames` off the model's grid | Evidence |
+|---|---|---|
+| `dtofficial` | **rejected** — hard usage error, `exit 64` | `Error: --frames must be 1, or 17k + 5 in the supported 5…362 range for MiniMax H3.` |
+| `dtcustom` | **accepted** — no failure; operator observation is that it rounds up | no error in the job log; the render proceeds. Not measured by ltxq. |
+
+The grids are the ones ltxq already models in `frame_grid()`: LTX/WAN `8n+1`
+(floor 9) and MiniMax H3 `17n+5`.
+
+Consequences for a future implementation:
+
+- Any frame-count control — the New-job `--frames` box — should be validated
+  against `frame_grid(model)` **before** dispatch when the target dialect is
+  strict. The engine's refusal arrives as a usage error *after* upload, so it
+  burns a dispatch and shows up as a crashed job.
+- The rulebook carries this as `strict_frames` (`True` for `dtofficial`,
+  `False` for `dtcustom`). It is **documented, not enforced** — no ltxq
+  behaviour depends on it today.
+- A non-grid count is not harmless on `dtcustom` either: that dialect silently
+  rounds up, so the rendered frame count may not be the one that was asked for.
+
 ## Binding
 
 `cli_dialect` resolves exactly like `cli_path` / `video_format`:

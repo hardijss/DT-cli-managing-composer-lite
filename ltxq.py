@@ -80,6 +80,9 @@ GENOPT = re.compile(r"^\s{2,8}(?:-[a-zA-Z],\s)?(--[A-Za-z0-9-/]+)", re.M)
 #   label     human name for notes/docs/UI
 #   serve     does the binary have the `serve` warm-worker subcommand?
 #   fflf_preflight  does it accept `generate ... --fflf-preflight`?
+#   strict_frames  does it REJECT a --frames count off the model's grid
+#                  (LTX/WAN 8n+1, MiniMax H3 17n+5) instead of rounding up?
+#                  Documented fact, not enforced yet — see docs/cli-dialects.md
 #   flags     semantic name -> CLI spelling, for EVERY flag the scheduler itself
 #             emits. A semantic that is ABSENT is unsupported in that dialect:
 #             ltxq must route the job to a host whose dialect has it, or refuse
@@ -107,6 +110,8 @@ DIALECTS = {
         "generate_cmd": "generate",
         "serve": True,
         "fflf_preflight": True,
+        # a --frames count off the model's grid is NOT rejected (rounds up)
+        "strict_frames": False,
         "flags": {
             "model": "--model",
             "config_file": "--config-file",
@@ -133,6 +138,8 @@ DIALECTS = {
         "generate_cmd": "generate",
         "serve": False,
         "fflf_preflight": False,
+        # --frames off the model's grid is a hard usage error (exit 64)
+        "strict_frames": True,
         "cap_hints": {
             "first_frame": _DT_OFFICIAL_FRAMES,
             "middle_frame": _DT_OFFICIAL_FRAMES,

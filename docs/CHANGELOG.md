@@ -96,6 +96,18 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
 - **`tests/test_poll.py`** (new): regression pinning the real captured shape
   (glued marker + live pid → alive) plus well-formed, empty and dead replies.
 
+### Docs: frame-count validation differs per dialect
+
+- **`docs/cli-dialects.md`**: new "Frame-count validation (strict vs rounding)"
+  section — `dtofficial` rejects a `--frames` count that is off the selected
+  model's grid (`exit 64`, usage error), while `dtcustom` accepts it and, by
+  observation, rounds up. Recorded so a future frame-count control validates
+  against `frame_grid(model)` before dispatch instead of discovering the
+  refusal as a crashed job.
+- **`ltxq.py`**: the rulebook now carries `strict_frames` (`True` for
+  `dtofficial`, `False` for `dtcustom`). Documented only — no behaviour depends
+  on it yet.
+
 ## [Unreleased] - 2026-09-15
 
 ### Feature: dashboard live updates via SSE with deduped polling
