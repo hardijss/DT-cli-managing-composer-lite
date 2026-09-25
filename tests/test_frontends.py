@@ -36,6 +36,7 @@ FEATURE_MARKERS = (
     "/api/events",                                  # SSE live updates
     "ICONS",                                        # monoline icon set
     "keyframes",                                    # keyframe rows
+    '$("bhost").onchange',                          # per-form model list reload
 )
 
 ID_RE = re.compile(r'id="([^"]+)"')

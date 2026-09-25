@@ -995,7 +995,7 @@ function syncHostOptions(hosts) {
   }
 }
 
-async function loadModels(alias) {
+async function loadModels(alias, target = "both") {
   try {
     const st = await api("/api/state");
     if (!alias) {
@@ -1004,18 +1004,24 @@ async function loadModels(alias) {
     syncHostOptions(st.hosts);
     lastHosts = st.hosts || []; updateDialectHint();
   } catch (e) {}
+  const msg = target === "batch" ? $("batchmsg") : $("addmsg");
   try {
     const m = await api("/api/models/" + (alias || "ltx-a"));
     const opts = m.models.map(x =>
       `<option value="${esc(x.model)}">${esc(x.name)}</option>`).join("")
       || '<option value="">none downloaded</option>';
-    $("model").innerHTML = opts;
-    $("bmodel").innerHTML = opts;
-    if (m.error) $("addmsg").textContent = "models: " + m.error;
-  } catch (e) { $("addmsg").textContent = e.message; }
+    if (target !== "batch") $("model").innerHTML = opts;
+    if (target !== "job")   $("bmodel").innerHTML = opts;
+    if (m.error) msg.textContent = "models: " + m.error;
+  } catch (e) { msg.textContent = e.message; }
 }
 loadModels();
-$("host").onchange = () => { updateDialectHint(); loadModels($("host").value); };
+// each form's model list follows its own host select — the audio-batch panel
+// used to inherit whatever the New-job form had loaded last, so models
+// installed only on the other host (e.g. MiniMax H3 on dt-community) never
+// showed up in its Model dropdown
+$("host").onchange = () => { updateDialectHint(); loadModels($("host").value, "job"); };
+$("bhost").onchange = () => loadModels($("bhost").value, "batch");
 
 $("lastcfg").onclick = async () => {
   try {
@@ -1138,7 +1144,8 @@ bimgClr.onclick = () => {
   dzSync(bimgDz); bimgClr.hidden = true;
 };
 $("bcopy").onclick = () => {
-  $("bmodel").value = $("model").value;
+  $("bmodel").innerHTML = $("model").innerHTML;   // the lists are per-form —
+  $("bmodel").value = $("model").value;           // carry the options over too
   $("bhost").value = $("host").value;
   $("bext").value = $("ext").value;
   if ($("seed").value) $("bseed").value = $("seed").value;

@@ -2,6 +2,22 @@
 
 All notable changes, bug fixes, and feature additions to `ltxq` are documented here.
 
+## [Unreleased] - 2026-09-25
+
+### Fix: audio-batch Model dropdown now follows its own Host select
+
+- **`static/index.html` / `static/index-next.html`**: the audio-batch panel's
+  Model dropdown was only ever filled as a side effect of the New-job form's
+  model load (page load or its Host select), so models installed solely on the
+  *other* host — e.g. the MiniMax H3 checkpoints on the `dt-community` host —
+  never appeared in the batch form. `loadModels()` now takes a target
+  (`job`/`batch`/`both`): each form's model list follows its own Host select
+  (`#bhost` gained the missing `onchange`), batch-side fetch errors surface in
+  the batch panel's message span instead of the New-job form's, and "Copy from
+  New job" carries the model options over along with the selection.
+- **`tests/test_frontends.py`**: new feature marker `$("bhost").onchange` so
+  the per-form wiring cannot silently disappear from either dashboard.
+
 ## [Unreleased] - 2026-09-21
 
 ### Feature: per-host engine-CLI dialects (`cli_dialect`)
