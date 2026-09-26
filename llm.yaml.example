@@ -1,0 +1,21 @@
+# llm.yaml — LLM endpoint profiles for the pairs prompt-synthesis helper
+# (docs/expansion-of-this-idea.md, "The LLM helper stage"). Same idea as
+# hosts.yaml, for OpenAI-compatible /v1 servers instead of render hosts:
+# plain HTTP, localhost or LAN, no API keys. Copy to llm.yaml (repo root or
+# ~/Library/Application Support/Ltxq/) and edit.
+#
+#   Ollama:     ollama serve            -> http://127.0.0.1:11434/v1
+#   LM Studio:  lms server start        -> http://<host>:1234/v1
+#
+# Pair synthesis needs a VISION-capable model (qwen2.5vl, llava, gemma3,
+# minicpm-v, ...). `model` is optional — the per-endpoint default the
+# dashboard opens with; the dropdown always lists what /v1/models reports.
+active: ollama-local
+timeout_s: 120          # per request; local vision calls can take a while
+endpoints:
+  - name: ollama-local
+    base_url: http://127.0.0.1:11434/v1
+    # model: qwen2.5vl:7b
+  # A LAN machine running LM Studio (start with `lms server start` there):
+  # - name: lmstudio-lan
+  #   base_url: http://192.168.213.106:1234/v1

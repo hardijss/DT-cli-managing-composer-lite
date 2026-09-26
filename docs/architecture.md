@@ -59,6 +59,11 @@ On each **ssh render host** (paths derived from `$HOME/<remote_root>`):
   extra options per host via `ssh_opts`.
 - **rsync / tar** — collection and upload.
 - **ffmpeg / ffprobe** — frame extraction from finished videos (local system).
+- **LLM endpoints (llm.yaml)** — the pairs prompt-synthesis helper POSTs to
+  user-configured OpenAI-compatible `/v1` servers (Ollama, LM Studio) on
+  localhost or the LAN; plain HTTP, no API keys, stdlib urllib, no new
+  dependency. Never on the render path — synthesis only writes into the
+  editable pairs manifest.
 - **SQLite** — single-file state, WAL, `busy_timeout=5s`.
 
 ## Concurrency model

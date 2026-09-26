@@ -338,6 +338,22 @@ a { color:var(--acc); text-decoration:none; }
       <label style="margin-top:10px">Shared prompt — used for pairs without a numbered
         <span class="mono">.txt</span> sidecar (editable per pair once parsed)</label>
       <textarea id="pprompt" style="min-height:56px"></textarea>
+      <div class="row" style="margin-top:10px" id="pllmrow">
+        <div><label>LLM endpoint (<span class="mono">llm.yaml</span>)</label>
+          <select id="pllendp" style="width:auto"></select></div>
+        <div><label>Vision model</label>
+          <select id="pllmm" style="width:auto"><option value="">—</option></select></div>
+        <div><label>Directive</label>
+          <select id="plldir" style="width:auto"></select></div>
+        <div><label>&nbsp;</label><br>
+          <button type="button" class="sec" id="pairsSynth" disabled
+            title="describe every pair's first→last transition with the vision LLM and fill the per-pair prompts (never overwrites prompts you typed inline)">Describe all pairs</button></div>
+        <div class="grow"><details id="pllmtemp">
+          <summary class="sub">prompt-writing instructions</summary>
+          <textarea id="pllmtemplate" style="min-height:96px;width:100%"></textarea>
+          <div class="row"><button type="button" class="sec" id="pllmtempSave">save instructions</button>
+            <span class="sub" id="pllmtempnote"></span></div></details></div>
+      </div>
       <div class="row" style="margin-top:10px">
         <div><label>Frames per pair unless overridden</label>
           <input id="pframes" type="number" style="width:110px" placeholder="template"></div>
@@ -1357,6 +1373,7 @@ function pairsRender() {
   $("pairsDiscard").hidden = !m;
   $("pairsQueue").disabled = !m || !m.pairs.length ||
     (pairsData.errors || []).length > 0;
+  pairsSynthEnabled();
   if (!m) { $("pairsmsg").textContent = ""; return; }
   $("pairsbadge").textContent = v
     ? `${v.model} · ${v.grid} grid${v.fps ? " · " + v.fps + " fps" : ""} · pairs compose as ${v.strategy}`
@@ -1400,7 +1417,9 @@ function pairsRender() {
       <td>${slot(p.first, "first")}<div class="sub">→</div>${slot(p.last, "last")}</td>
       <td><textarea data-act="prompt" data-i="${i}" rows="2"
             placeholder="prompt for this pair">${esc(p.prompt)}</textarea>
-          <div class="sub">${esc(p.prompt_src || "no prompt yet")}</div></td>
+          <div class="sub">${esc(p.prompt_src || "no prompt yet")}</div>
+          <button type="button" class="sec" data-act="llm" data-i="${i}"
+            title="describe this pair's first→last transition with the vision LLM">🪄 describe</button></td>
       <td><input type="number" data-act="frames" data-i="${i}" style="width:90px"
             value="${p.frames_override || ""}" placeholder="${pv.frames || "template"}">
           <div class="sub">${pv.frames || "—"} frames${dur}</div></td>
@@ -1425,6 +1444,7 @@ $("pairsrows").addEventListener("click", e => {
   const b = e.target.closest("button[data-act]");
   if (!b) return;
   const i = +b.dataset.i, ps = pairsData.manifest.pairs;
+  if (b.dataset.act === "llm") { pairsSynthOne(i); return; }
   if (b.dataset.act === "up" && i > 0) [ps[i - 1], ps[i]] = [ps[i], ps[i - 1]];
   else if (b.dataset.act === "down" && i < ps.length - 1) [ps[i + 1], ps[i]] = [ps[i], ps[i + 1]];
   else if (b.dataset.act === "del") ps.splice(i, 1);
@@ -1528,6 +1548,145 @@ $("pairsDiscard").onclick = async () => {
   pairsForget();
 };
 if (pairsSid) api(`/api/pairs/${pairsSid}`).then(pairsApply).catch(() => pairsForget());
+
+// ---- LLM pair synthesis (llm.yaml endpoint profiles; the helper stage from
+// docs/expansion-of-this-idea.md). Results land in the per-pair prompts
+// (prompt_src "llm") and are reviewed/edited here before queueing.
+let pllEndps = [];                 // llm.yaml profiles as the server sees them
+let pllDirs = [];                  // directive library (shipped + local overrides)
+let pllDirPicked = false;          // user overrode the model-matched default
+let synthT = null;
+function pairsSynthEnabled() {
+  const m = pairsData && pairsData.manifest;
+  const on = $("pllmm").selectedOptions[0];
+  $("pairsSynth").disabled = !m || !m.pairs.length ||
+    !$("pllmm").value || !!(on && on.disabled);
+}
+async function pllLoadEndpoints() {
+  try {
+    const r = await api("/api/llm/endpoints");
+    pllEndps = r.endpoints || [];
+    $("pllendp").innerHTML = pllEndps.map(e =>
+      `<option value="${esc(e.name)}">${esc(e.name)}</option>`).join("");
+    let endp = localStorage.getItem("ltxq.llm_endpoint") || r.active || "";
+    if (!pllEndps.some(e => e.name === endp)) endp = r.active || "";
+    if (!pllEndps.some(e => e.name === endp)) endp = pllEndps[0] ? pllEndps[0].name : "";
+    $("pllendp").value = endp;
+    pllLoadModels();
+  } catch (e) { /* endpoint service down — selects stay empty */ }
+}
+async function pllLoadModels() {
+  const endp = $("pllendp").value;
+  localStorage.setItem("ltxq.llm_endpoint", endp);
+  const prof = pllEndps.find(e => e.name === endp) || {};
+  $("pllmm").innerHTML = `<option value="">loading…</option>`;
+  try {
+    const models = await api(`/api/llm/models?endpoint=${encodeURIComponent(endp)}`);
+    if (models.error || !models.models.length) {
+      $("pllmm").innerHTML = `<option value="">unreachable / no models</option>`;
+      $("pllmm").title = models.error || "";
+    } else {
+      $("pllmm").title = "";
+      $("pllmm").innerHTML = models.models.map(m => `<option>${esc(m)}</option>`).join("");
+      const pick = [localStorage.getItem("ltxq.llm_model"), prof.model]
+        .find(m => m && models.models.includes(m));
+      if (pick) $("pllmm").value = pick;
+    }
+  } catch (e) { $("pllmm").innerHTML = `<option value="">unreachable</option>`; }
+  pairsSynthEnabled();
+}
+$("pllendp").onchange = pllLoadModels;
+$("pllmm").onchange = () => {
+  localStorage.setItem("ltxq.llm_model", $("pllmm").value);
+  pairsSynthEnabled();
+};
+async function pllLoadDirectives() {
+  const model = ($("pmodel") && $("pmodel").value) || "";
+  try {
+    const r = await api(`/api/llm/directives?model=${encodeURIComponent(model)}`);
+    pllDirs = r.directives || [];
+    $("plldir").innerHTML = pllDirs.map(d =>
+      `<option value="${esc(d.name)}" title="${esc(d.path)}">${esc(d.name)}${d.custom ? " *" : ""}</option>`).join("");
+    let name = pllDirPicked ? $("plldir").value : r.default;
+    if (!pllDirs.some(d => d.name === name)) name = r.default;
+    if (!pllDirs.some(d => d.name === name)) name = pllDirs[0] ? pllDirs[0].name : "";
+    $("plldir").value = name;
+    pllLoadTemplate();
+  } catch (e) { /* directive service down — dropdown stays empty */ }
+}
+async function pllLoadTemplate() {
+  const name = $("plldir").value;
+  if (!name) { $("pllmtemplate").value = ""; $("pllmtempnote").textContent = ""; return; }
+  try {
+    const r = await api(`/api/llm/template?name=${encodeURIComponent(name)}`);
+    $("pllmtemplate").value = r.template;
+    $("pllmtempnote").textContent = r.custom ? "saved override" : "shipped variant";
+  } catch (e) { flash(e.message, true); }
+}
+$("plldir").onchange = () => { pllDirPicked = true; pllLoadTemplate(); };
+$("pmodel").addEventListener("change", () => {   // re-match the directive
+  pllDirPicked = false; pllLoadDirectives();
+});
+async function pairsSynthOne(i) {
+  if (!pairsSid || !$("pllmm").value) return flash("pick a vision model first", true);
+  $("pairsmsg").textContent = `describing pair ${i + 1}…`;
+  try {
+    pairsApply(await api(`/api/pairs/${pairsSid}/synth`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({index: i, endpoint: $("pllendp").value,
+                            model: $("pllmm").value, directive: $("plldir").value})}));
+    flash(`pair ${i + 1} prompt written — review it before queueing`);
+  } catch (e) { flash(e.message, true); }
+  $("pairsmsg").textContent = "";
+}
+$("pairsSynth").onclick = async () => {
+  if (!pairsSid || !$("pllmm").value) return flash("pick a vision model first", true);
+  try {
+    await api(`/api/pairs/${pairsSid}/synth`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({endpoint: $("pllendp").value, model: $("pllmm").value,
+                            directive: $("plldir").value})});
+    $("pairsSynth").disabled = true;
+    pairsSynthPoll();
+  } catch (e) { flash(e.message, true); }
+};
+function pairsSynthPoll() {
+  clearTimeout(synthT);
+  synthT = setTimeout(async () => {
+    let s = null;
+    try { s = await api(`/api/pairs/${pairsSid}/synth`); } catch (e) {}
+    if (s && s.running) {
+      $("pairsmsg").textContent =
+        `describing pair ${s.current ? s.current.pair : "…"} (${s.done}/${s.total})…`;
+      return pairsSynthPoll();
+    }
+    api(`/api/pairs/${pairsSid}`).then(pairsApply).catch(() => {});  // final refresh
+    if (s) {
+      const bad = (s.errors || []).length, skp = (s.skipped || []).length;
+      flash(`pairs described: ${s.total - bad - skp}/${s.total}`
+        + (bad ? ` · ${bad} failed` : "") + (skp ? ` · ${skp} skipped` : "")
+        + " — review before queueing", !!bad);
+    }
+    $("pairsmsg").textContent = "";
+    pairsSynthEnabled();
+  }, 1500);
+}
+$("pllmtemp").addEventListener("toggle", () => {
+  if ($("pllmtemp").open && !$("pllmtemplate").value) pllLoadTemplate();
+});
+$("pllmtempSave").onclick = async () => {
+  if (!$("plldir").value) return flash("no directive selected", true);
+  try {
+    await api("/api/llm/template", {method: "PUT",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({template: $("pllmtemplate").value,
+                            name: $("plldir").value})});
+    $("pllmtempnote").textContent = "saved override";
+    flash(`directive "${$("plldir").value}" saved`);
+  } catch (e) { flash(e.message, true); }
+};
+pllLoadEndpoints();
+pllLoadDirectives();
 
 // ---- composer mode tabs (slice 1: shell only — both forms unchanged) ----
 const MODE_PANELS = { single: $("panel-single"), audio: $("panel-audio"), pairs: $("panel-pairs") };

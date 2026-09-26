@@ -41,6 +41,10 @@ FEATURE_MARKERS = (
     "pairsform",                                    # keyframe-pairs batch panel
     "/api/pairs/",                                  # ...and its staging API
     '$("phost").onchange',                          # per-form model list reload
+    "pairsSynth",                                   # LLM pair-vision synthesis
+    "plldir",                                       # ...its directive dropdown
+    "/api/llm/",                                    # ...and its endpoint API
+    "/api/llm/directives",                          # directive library in both
 )
 
 ID_RE = re.compile(r'id="([^"]+)"')

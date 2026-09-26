@@ -3,7 +3,7 @@
 One-shot runner (default) and serve (warm worker) backends. Mac/Linux hosts.
 Deps: python3 + pyyaml + system ssh/rsync/tar.
 """
-import argparse, gc, hashlib, importlib.metadata, json, os, random, re, shlex, shutil, sqlite3, subprocess, sys, time, uuid
+import argparse, base64, gc, hashlib, importlib.metadata, json, os, random, re, shlex, shutil, sqlite3, subprocess, sys, time, urllib.error, urllib.request, uuid
 from pathlib import Path
 import yaml
 
@@ -38,6 +38,19 @@ def _resolve_conf_path() -> Path:
     return candidates[0]
 
 CONF_PATH = _resolve_conf_path()
+
+def _resolve_llm_path() -> Path:
+    """Where llm.yaml lives (same idea as hosts.yaml, minus the seeding and
+    $LTXQ_CONF override — LLM endpoints are a lighter-weight concern)."""
+    candidates = [HERE / "llm.yaml"]
+    if _APP_SUPPORT:
+        candidates.append(_APP_SUPPORT / "llm.yaml")
+    for c in candidates:
+        if c.exists():
+            return c
+    return candidates[0]
+
+LLM_PATH = _resolve_llm_path()
 
 _conf_mtime = None
 
@@ -1656,6 +1669,247 @@ def _cmd_add_batch(c, con, a):
                   + (f"  [{it['note']}]" if it["note"] else ""))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+# --- LLM prompt-synthesis helper (docs/expansion-of-this-idea.md, "The LLM
+# helper stage"): one OpenAI-compatible client (Ollama :11434 / LM Studio
+# :1234 / any /v1 server — localhost or LAN, plain HTTP, no API keys) behind
+# llm.yaml endpoint profiles, the hosts.yaml pattern applied to LLM servers.
+# Phase A covers pair-vision synthesis; text-only enhancement reuses
+# llm_chat later. Stdlib urllib only — ltxq gains no LLM dependency.
+
+class LLMError(RuntimeError):
+    pass
+
+_DEFAULT_LLM_ENDPOINTS = [{"name": "ollama-local",
+                           "base_url": "http://127.0.0.1:11434/v1",
+                           "model": ""}]
+
+def llm_conf():
+    """llm.yaml parsed and sanitized: {active, timeout_s, endpoints:[{name,
+    base_url, model}]}. A missing or broken file degrades to the built-in
+    Ollama endpoint so the feature still works with zero config. Re-read on
+    every call, like conf() — edits hot-apply."""
+    out = {"active": "", "timeout_s": 120, "endpoints": []}
+    if LLM_PATH.exists():
+        try:
+            y = yaml.safe_load(LLM_PATH.read_text()) or {}
+        except yaml.YAMLError as e:
+            print(f"WARNING: {LLM_PATH}: {e}", file=sys.stderr)
+            y = {}
+        if isinstance(y.get("active"), str):
+            out["active"] = y["active"].strip()
+        try:
+            out["timeout_s"] = max(10, int(y.get("timeout_s") or 120))
+        except (TypeError, ValueError):
+            pass
+        eps = y.get("endpoints")
+        if isinstance(eps, list):
+            for e in eps:
+                if not isinstance(e, dict):
+                    continue
+                name = str(e.get("name") or "").strip()
+                base = str(e.get("base_url") or "").strip().rstrip("/")
+                if not name or not base.startswith("http"):
+                    continue
+                out["endpoints"].append({"name": name, "base_url": base,
+                                         "model": str(e.get("model") or "").strip()})
+    if not out["endpoints"]:
+        out["endpoints"] = [dict(e) for e in _DEFAULT_LLM_ENDPOINTS]
+    if out["active"] not in {e["name"] for e in out["endpoints"]}:
+        out["active"] = out["endpoints"][0]["name"]
+    return out
+
+def llm_endpoint(name=None):
+    """(endpoint, timeout_s, error) — the named profile or the active one."""
+    c = llm_conf()
+    if not name:
+        name = c["active"]
+    for e in c["endpoints"]:
+        if e["name"] == name:
+            return e, c["timeout_s"], None
+    return None, c["timeout_s"], f"no LLM endpoint named '{name}' (llm.yaml)"
+
+def _llm_http(base_url, path, payload=None, timeout=120):
+    """One OpenAI-compatible HTTP call (JSON in/out). Any non-2xx, transport
+    or decode failure raises LLMError with a user-facing message."""
+    url = base_url.rstrip("/") + path
+    req = urllib.request.Request(
+        url, method="POST" if payload is not None else "GET",
+        data=None if payload is None else json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read()
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode(errors="replace")[:300]
+        except Exception:
+            pass
+        raise LLMError(f"LLM HTTP {e.code} from {url}: {detail}") from None
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise LLMError(f"LLM unreachable at {url} "
+                       f"({getattr(e, 'reason', e)})") from None
+    try:
+        return json.loads(body.decode())
+    except (ValueError, UnicodeDecodeError):
+        raise LLMError(f"LLM returned non-JSON from {url}") from None
+
+def llm_models(base_url, timeout=120):
+    """Model ids from GET /v1/models (Ollama and LM Studio both serve it)."""
+    d = _llm_http(base_url, "/models", timeout=timeout)
+    ids = [str(m.get("id")) for m in d.get("data", [])
+           if isinstance(m, dict) and m.get("id")]
+    return sorted(set(ids))
+
+def llm_chat(base_url, model, messages, timeout=120, temperature=0.3):
+    """One /v1/chat/completions call; returns the assistant text."""
+    d = _llm_http(base_url, "/chat/completions", payload={
+        "model": model, "messages": messages, "temperature": temperature,
+        "stream": False}, timeout=timeout)
+    try:
+        txt = d["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        raise LLMError("LLM reply had no message content: "
+                       + json.dumps(d)[:200]) from None
+    return (txt or "").strip()
+
+LLM_DIRECTIVES_DIR = "llm_directives"
+LLM_DEFAULT_DIRECTIVE = "ltx-default"
+LLM_H3_DIRECTIVE = "minimax-h3-fl2va"
+
+def llm_directives():
+    """The directive library: named instruction variants the synthesis calls
+    are steered with. Shipped ones sit in templates/llm_directives/; a
+    user-local llm_directives/ next to hosts.yaml wins by name (override or
+    own creations). Returns [{name, custom, path}] sorted by name."""
+    out = {}
+    for root, custom in ((HERE / "templates" / LLM_DIRECTIVES_DIR, False),
+                         (CONF_PATH.parent / LLM_DIRECTIVES_DIR, True)):
+        try:
+            for p in sorted(root.glob("*.txt")):
+                out[p.stem] = {"name": p.stem, "custom": custom, "path": str(p)}
+        except OSError:
+            pass
+    return sorted(out.values(), key=lambda d: d["name"])
+
+def llm_directive(name=None):
+    """(text, meta, error) for one directive; nameless resolves the default."""
+    if not name:
+        name = LLM_DEFAULT_DIRECTIVE
+    meta = next((d for d in llm_directives() if d["name"] == name), None)
+    if meta is None:
+        return "", None, (f"no directive named '{name}' "
+                          f"(llm_directives library)")
+    try:
+        return Path(meta["path"]).read_text().strip(), meta, None
+    except OSError as e:
+        return "", meta, f"cannot read {meta['path']}: {e}"
+
+def llm_default_directive(model=None):
+    """Directive id matching a generation model: the H3 family speaks the
+    MiniMax prompt format (same sniff as the frame grid), everything else
+    gets the LTX default."""
+    return LLM_H3_DIRECTIVE if frame_grid(model)[0] == 17 \
+        else LLM_DEFAULT_DIRECTIVE
+
+LLM_PLACEHOLDER_RE = re.compile(r"\{\{([A-Z][A-Z0-9_]*)\}\}")
+
+def llm_fill_placeholders(text, subs):
+    """Substitute {{KEY}} tokens in a directive's output with server-computed
+    values (DUR = clip seconds to two decimals, FRAMES, FPS). A placeholder
+    that has no value is an error — a directive asking for something ltxq
+    could not compute must never reach the queue with a literal {{...}} in
+    the prompt text."""
+    def sub(m):
+        key = m.group(1)
+        if key not in subs:
+            raise LLMError(f"directive output still contains {{{{{key}}}}} "
+                           f"— its value is unavailable for this pair")
+        return str(subs[key])
+    return LLM_PLACEHOLDER_RE.sub(sub, text)
+
+_LLM_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+             ".webp": "image/webp", ".gif": "image/gif"}
+
+def _llm_image_part(path, tmp_dir, max_side=1024):
+    """One image_url content part (base64 data URL) for a staged still.
+    ffmpeg-downscales to jpg when the longest side exceeds max_side so local
+    vision models don't chew on multi-megabyte PNGs; on any resize failure the
+    original file goes out untouched."""
+    src = Path(path)
+    mime = _LLM_MIME.get(src.suffix.lower(), "image/png")
+    send = src
+    try:
+        dims = _img_dims(str(src))
+        if dims and max(dims) > max_side:
+            dst = Path(tmp_dir) / f"llmv_{src.stem}.jpg"
+            r = subprocess.run(
+                [ff_tool("ffmpeg"), "-y", "-v", "error", "-i", str(src),
+                 "-vf", f"scale='min(iw,{max_side})':'min(ih,{max_side})':"
+                        "force_original_aspect_ratio=decrease",
+                 "-q:v", "2", str(dst)],
+                capture_output=True, text=True, timeout=60)
+            if r.returncode == 0 and dst.exists():
+                send, mime = dst, "image/jpeg"
+    except Exception:
+        pass
+    b64 = base64.b64encode(send.read_bytes()).decode()
+    return {"type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{b64}"}}
+
+def llm_pair_messages(first_path, last_path, shared_prompt, template, tmp_dir,
+                      facts=None):
+    """The chat messages for one keyframe pair: the directive as the system
+    role, then both stills (order-labeled) plus the shared prompt as
+    scene/style intent and any clip facts worth steering with. The call is
+    self-contained per pair — no context from other pairs — so a synthesized
+    prompt survives reordering."""
+    ctx = (f"\n\nThe user's scene/style intent (honor it in the prompt; do not "
+           f"just repeat it verbatim):\n{shared_prompt}" if shared_prompt else "")
+    if facts:
+        ctx += "\n\nClip facts: " + "; ".join(f"{k} = {v}"
+                                              for k, v in facts.items())
+    parts = [
+        {"type": "text", "text": "Two stills follow: the FIRST frame, then "
+         "the LAST frame of one short video." + ctx},
+        _llm_image_part(first_path, tmp_dir),
+        {"type": "text", "text": "That was the first frame. Next is the last "
+         "frame."},
+        _llm_image_part(last_path, tmp_dir),
+        {"type": "text", "text": "Write the video prompt now — output only "
+         "the prompt text."}]
+    return [{"role": "system", "content": template},
+            {"role": "user", "content": parts}]
+
+def pairs_pair_messages(pair, staging, shared_prompt, template, tmp_dir=None,
+                        facts=None):
+    """The chat messages for one manifest pair, validating its staged stills.
+    Split from pairs_describe_pair so the bulk runner can make the LLM call
+    and write the result back in two separate steps (see server.py)."""
+    if not (pair.get("first") and pair.get("last")):
+        raise LLMError("pair has no first/last still assigned")
+    first, last = staging / pair["first"], staging / pair["last"]
+    for p in (first, last):
+        if not p.is_file():
+            raise LLMError(f"staged still missing: {p.name}")
+    return llm_pair_messages(first, last, shared_prompt, template,
+                             Path(tmp_dir) if tmp_dir else staging, facts)
+
+def pairs_describe_pair(pair, staging, shared_prompt, base_url, model,
+                        template, timeout=120, tmp_dir=None, facts=None,
+                        subs=None):
+    """One vision-LLM call for one manifest pair: both staged stills in, one
+    self-contained prompt text out. `subs` fills {{KEY}} placeholders in the
+    directive's output with server-computed values. Raises LLMError on
+    anything wrong."""
+    msgs = pairs_pair_messages(pair, staging, shared_prompt, template,
+                               tmp_dir, facts)
+    txt = llm_fill_placeholders(
+        llm_chat(base_url, model, msgs, timeout=timeout).strip(), subs or {})
+    if not txt:
+        raise LLMError("LLM returned an empty prompt")
+    return txt
 
 # --- add-pairs: keyframe-pair batch composer (docs/expansion-of-this-idea.md Idea 2)
 
