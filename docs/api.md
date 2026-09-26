@@ -1,6 +1,6 @@
 # HTTP API
 
-**API version: 1.7** (see [Versioning](#versioning) at the end).
+**API version: 1.8** (see [Versioning](#versioning) at the end).
 
 The dashboard, the native macOS app, and external job-composition tools are
 all clients of the same localhost API served by `ltxq.py ui` (Flask, in
@@ -178,6 +178,26 @@ blocking: an empty prompt, and a pair with one still missing (composed with
 the side it has — see cli-dialects.md). Only a pair with no stills at all
 blocks.
 
+### `/api/llm/*` — LLM prompt-synthesis helper *(since API 1.8)*
+
+Named OpenAI-compatible endpoints from `llm.yaml` (Ollama / LM Studio,
+localhost or LAN — plain HTTP, no API keys) plus the pair-vision synthesis
+step of the pairs panel. Synthesis never queues anything: results land in the
+per-pair prompt fields (`prompt_src: "llm"`) for review.
+
+| endpoint | meaning |
+|---|---|
+| `GET /api/llm/endpoints` | `{"active", "timeout_s", "endpoints": [{name, base_url, model}]}` from llm.yaml (built-in Ollama endpoint when the file is absent) |
+| `GET /api/llm/models?endpoint=<name>` | model ids of that endpoint (proxy of `GET /v1/models`); unreachable → 502 `{"error", "models": []}` |
+| `GET /api/llm/directives?model=<gen-model>` | the directive library `{"directives": [{name, custom, path}], "default"}` — `default` matches the generation model (H3 → `minimax-h3-fl2va`, else `ltx-default`) |
+| `GET /api/llm/template?name=<id>` | one directive's text `{"name", "template", "custom", "path"}` (nameless = `ltx-default`); unknown → 400 |
+| `PUT /api/llm/template` | `{"template", "name"}` — write a user-local directive (override or new variant; name `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`); empty template → 400 |
+| `POST /api/pairs/<sid>/synth` | describe pair transition(s) with the endpoint's vision model, steered by `directive` (body; default follows the pairs model). Body `{"index": N, "endpoint", "model", "directive"}` = one pair, synchronous, answers the normal pairs payload. Body without index = all pairs, background thread → `{"ok", "total"}`; sequential, skips non-empty inline prompts and still-less pairs, continues past per-pair failures; a run already active → 409. `{{DUR}}`/`{{FRAMES}}`/`{{FPS}}` in the directive's output are filled from the resolved view; an unfillable placeholder fails that pair with a clear error |
+| `GET /api/pairs/<sid>/synth` | bulk-run progress `{"running", "done", "total", "current": {n, pair}, "errors": [{pair, error}], "skipped": [{pair, reason}]}` |
+
+Synthesis records the directive used as `manifest.llm_directive` (provenance
+for the review UI; manifest PUTs keep the field).
+
 ### `POST /api/regen/<jid>` (form)
 
 Re-create a past job: same fields as `/api/add` except `prompt` (reused);
@@ -339,6 +359,8 @@ data: {"hosts": [{"alias": "ltx-a", "worker_alive": true, ...}]}
   existing endpoint changed.
 - **1.7** — adds the `/api/pairs/*` keyframe-pair batch session endpoints
   (staging, review/edit, queue). No existing endpoint changed.
+- **1.8** — adds the `/api/llm/*` helper endpoints and pair-vision
+  `POST/GET /api/pairs/<sid>/synth`. No existing endpoint changed.
 
 Changes are additive: new endpoints, new optional request fields, new
 response fields. Breaking changes would bump the major version and be

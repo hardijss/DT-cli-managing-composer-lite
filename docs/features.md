@@ -91,6 +91,24 @@
   the derived layer and keeps the edited sequence; the session autosaves and
   survives a page refresh; queue re-validates server-side. Runs the same
   planner as `add-pairs` (`/api/pairs/*`, API 1.7)
+- **LLM pair-vision synthesis** (pairs panel): a local vision LLM describes
+  each pair's first→last transition and fills the per-pair prompts
+  (`prompt_src: "llm"`) for review before queueing — "Describe all pairs"
+  bulk run with live progress (skips inline-typed prompts, continues past
+  per-pair failures) or per-pair 🪄. Endpoints are named OpenAI-compatible
+  profiles in `llm.yaml` (Ollama / LM Studio, localhost or LAN, no API keys;
+  `/api/llm/*`). The steering **directive** is picked from a variant library
+  (`templates/llm_directives/`: `ltx-default`, `minimax-h3-fl2va` — distilled
+  from the original MiniMax guide down to the FL2VA subset pairs need, full
+  guide kept at `docs/reference/minimax-video-prompt-guide.md` as the source
+  for further variants);
+  user-local variants/overrides live next to hosts.yaml and win by name, and
+  the dropdown auto-follows the pairs model (H3 family → the MiniMax format).
+  Server-computed `{{DUR}}`/`{{FRAMES}}`/`{{FPS}}` placeholders let a
+  directive emit exact alignment lines (e.g. H3's "…aligns with the S.SS-
+  second mark") without trusting the LLM with arithmetic. Prompts are
+  self-contained by design (no cross-pair references), so reordering stays
+  safe
 
 ### CLI
 - `add/add-batch/ls/run/cancel/regen/check/probe/models/stage/reconcile/

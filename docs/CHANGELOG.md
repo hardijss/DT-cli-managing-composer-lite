@@ -2,6 +2,80 @@
 
 All notable changes, bug fixes, and feature additions to `ltxq` are documented here.
 
+## [Unreleased] - 2026-09-26
+
+### Feature: LLM pair-vision synthesis (the helper stage, phase A)
+
+- **`ltxq.py`**: the LLM helper stage from docs/expansion-of-this-idea.md —
+  one stdlib-urllib OpenAI-compatible client (`llm_chat`, `llm_models`,
+  `LLMError`) with zero new dependencies, driven by named endpoint profiles in
+  a new `llm.yaml` (hosts.yaml pattern: repo root or ~/Library/Application
+  Support/Ltxq/, `llm.yaml.example` shipped, missing file degrades to a
+  built-in Ollama endpoint). `llm_pair_messages`/`pairs_describe_pair` build a
+  per-pair vision call: both staged stills (ffmpeg-downscaled to jpg when
+  longer than 1024 px) plus the shared prompt as scene/style intent; the
+  instruction template lives in the shipped editable
+  `templates/llm_pair_prompt.txt`, user-local override next to hosts.yaml.
+- **`server.py`**: `/api/llm/endpoints|models|template` (GET; template PUT
+  writes the override) and `POST /api/pairs/<sid>/synth` — one pair
+  (`{index: N}`, synchronous) or all pairs (background thread, sequential,
+  merge-tray-style `SYNTH_RUN` progress + `GET /synth` status). Bulk never
+  overwrites a non-empty inline prompt, skips pairs with unassigned stills,
+  and continues past per-pair LLM failures (recorded in the run status).
+  Results write into the editable per-pair prompt fields with
+  `prompt_src: "llm"`; the worker re-reads the manifest fresh after each
+  (slow) call so dashboard edits made mid-run survive and a pair deleted
+  mid-run is skipped, not mis-described.
+- **`static/index.html` / `index-next.html`**: pairs panel gains an LLM row —
+  endpoint + vision-model dropdowns (`/v1/models` discovery, selection kept
+  in localStorage with llm.yaml fallbacks), "Describe all pairs" with live
+  progress, a collapsible instruction-template editor, and a per-pair
+  "🪄 describe" button. Prompts land in the existing textareas for review
+  before queueing (two-phase by construction). Feature parity enforced via
+  new FEATURE_MARKERS in tests/test_frontends.py.
+- **`tests/test_llm.py`** (17 tests): fake OpenAI-compatible http.server for
+  real client round-trips (models/chat/error paths), llm.yaml parsing and
+  sanitizing, template override flow, and the full synth flow over the Flask
+  test client (single-pair, bulk skip/error-continuation, mid-run pair
+  removal, 400/409/502 paths).
+- Local `llm.yaml` seeded with your two profiles (`ollama-local`,
+  `lmstudio-lan` at 192.168.213.106:1234 — currently refusing connections:
+  start `lms server start` there and enable network serving).
+
+### Feature: directive variants (one directive per target model format)
+
+- **`ltxq.py`**: the single instruction template becomes a named **directive
+  library** — shipped variants in `templates/llm_directives/` (`ltx-default`,
+  `minimax-h3-fl2va`), user-local `llm_directives/` next to hosts.yaml wins
+  by name (overrides + own creations; supersedes the single
+  `llm_pair_prompt.txt`). `llm_default_directive(model)` auto-matches the
+  pairs model via the same sniff as the frame grid (H3 family → the MiniMax
+  FL2VA format, else LTX). `llm_fill_placeholders` substitutes `{{DUR}}` /
+  `{{FRAMES}}` / `{{FPS}}` in a directive's *output* with server-computed
+  values (duration = grid-resolved frames ÷ fps, two decimals) — an
+  unsubstitutable placeholder fails that pair rather than queueing a literal
+  `{{...}}`. Clip facts (frames/fps/seconds) ride into the user message.
+- **`server.py`**: `GET /api/llm/directives?model=` (library + model-matched
+  default), `/api/llm/template` now takes/saves a `name` (PUT with a new
+  name creates a variant; path-traversal-safe). Synth bodies accept
+  `directive`; the resolved name is recorded in the manifest as
+  `llm_directive` provenance; per-pair subs are computed from one view
+  resolve (single route: pre-resolve; bulk: one resolve at start, items
+  carry their subs).
+- **`static/index.html` / `index-next.html`**: Directive dropdown in the
+  pairs LLM row — auto-follows the pairs model until you pick one manually;
+  the collapsible editor binds to the selected variant and saves it
+  (shipped variants become local overrides on save).
+- **`templates/llm_directives/minimax-h3-fl2va.txt`**: distilled from the
+  original MiniMax prompt-writing guide (T2VA/I2VA/FL2VA) down to the FL2VA
+  subset pairs need — verbatim alignment line with the `{{DUR}}` token,
+  single `[Shot 1]` three-fields structure, the camera-motion vocabulary,
+  soundscape/music fields, compact dialogue rule. The full guide is now
+  kept as a reference copy at
+  `docs/reference/minimax-video-prompt-guide.md` (provenance header +
+  unmodified text) — the source material for distilling further variants;
+  the shipped directives double as worked examples.
+
 ## [Unreleased] - 2026-09-25
 
 ### Feature: keyframe-pair batch composer (`add-pairs` + Pairs batch panel)

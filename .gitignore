@@ -9,6 +9,7 @@ jobs/
 
 # Local / sensitive config
 hosts.yaml
+llm.yaml
 .ssh_mux/
 
 # Python

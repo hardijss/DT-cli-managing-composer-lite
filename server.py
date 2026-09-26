@@ -1173,6 +1173,266 @@ def api_pairs_discard(sid):
     return flask.jsonify(discarded=sid)
 
 
+# --- LLM prompt synthesis (docs/expansion-of-this-idea.md "The LLM helper
+# stage"). Endpoint profiles live in llm.yaml (hosts.yaml pattern: plain HTTP
+# to OpenAI-compatible /v1 servers — Ollama / LM Studio, localhost or LAN, no
+# API keys). Two-phase by construction: synthesis writes into the editable
+# per-pair prompt fields (prompt_src "llm"); nothing queues without review.
+
+@app.get("/api/llm/endpoints")
+def api_llm_endpoints():
+    c = ltxq.llm_conf()
+    return flask.jsonify(active=c["active"], timeout_s=c["timeout_s"],
+                         endpoints=c["endpoints"])
+
+@app.get("/api/llm/models")
+def api_llm_models():
+    """Model ids of one endpoint (proxy of GET /v1/models)."""
+    ep, timeout, err = ltxq.llm_endpoint(
+        (flask.request.args.get("endpoint") or "").strip() or None)
+    if err:
+        return flask.jsonify(error=err, models=[]), 400
+    try:
+        return flask.jsonify(models=ltxq.llm_models(ep["base_url"], timeout=timeout))
+    except ltxq.LLMError as e:
+        return flask.jsonify(error=str(e), models=[]), 502
+
+@app.get("/api/llm/directives")
+def api_llm_directives():
+    """The directive library for the dropdown; `default` follows the pairs
+    generation model when ?model= is given (H3 models speak the MiniMax
+    format, everything else the LTX default)."""
+    model = (flask.request.args.get("model") or "").strip()
+    return flask.jsonify(directives=ltxq.llm_directives(),
+                         default=ltxq.llm_default_directive(model))
+
+LLM_DIRECTIVE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+
+@app.get("/api/llm/template")
+def api_llm_template():
+    """One directive's text (nameless = the default)."""
+    name = (flask.request.args.get("name") or "").strip() or None
+    txt, meta, err = ltxq.llm_directive(name)
+    if err:
+        return flask.jsonify(error=err, name=name or "", template=""), 400
+    return flask.jsonify(name=meta["name"], template=txt,
+                         custom=meta["custom"], path=meta["path"])
+
+@app.put("/api/llm/template")
+def api_llm_template_put():
+    """Write a user-local directive (override of a shipped variant, or a new
+    one) — the shipped library in templates/ stays untouched."""
+    d = flask.request.get_json(silent=True) or {}
+    txt = str(d.get("template") or "").strip()
+    name = (d.get("name") or "").strip()
+    if not txt:
+        return flask.jsonify(error="template must not be empty"), 400
+    if not LLM_DIRECTIVE_NAME_RE.match(name):
+        return flask.jsonify(error="invalid directive name"), 400
+    ddir = ltxq.CONF_PATH.parent / ltxq.LLM_DIRECTIVES_DIR
+    try:
+        ddir.mkdir(parents=True, exist_ok=True)
+        (ddir / f"{name}.txt").write_text(txt.rstrip() + "\n")
+    except OSError as e:
+        return flask.jsonify(error=f"cannot write {ddir}: {e}"), 500
+    return flask.jsonify(ok=True, name=name, template=txt, custom=True,
+                         path=str(ddir / f"{name}.txt"))
+
+
+def _pairs_llm_setup(d, gen_model=None):
+    """(endpoint, vision model, directive name, directive text, timeout_s,
+    error) from a synth request body. The directive falls back to the
+    model-matched default when omitted (never when explicitly named); a
+    vanished default falls back to ltx-default."""
+    ep, timeout, err = ltxq.llm_endpoint((d.get("endpoint") or "").strip() or None)
+    if err:
+        return None, None, None, None, timeout, err
+    model = (d.get("model") or "").strip() or ep.get("model") or ""
+    if not model:
+        return None, None, None, None, timeout, ("no model chosen — pick a "
+            "vision model in the pairs panel (or set model: on the endpoint "
+            "in llm.yaml)")
+    explicit = (d.get("directive") or "").strip()
+    name = explicit or ltxq.llm_default_directive(gen_model)
+    txt, meta, terr = ltxq.llm_directive(name)
+    if terr and not explicit and name != ltxq.LLM_DEFAULT_DIRECTIVE:
+        name = ltxq.LLM_DEFAULT_DIRECTIVE
+        txt, meta, terr = ltxq.llm_directive(name)
+    if terr:
+        return None, None, None, None, timeout, terr
+    return ep, model, name, txt, timeout, None
+
+
+def _pairs_pair_subs(view, i):
+    """{{DUR}}/{{FRAMES}}/{{FPS}} values for one pair from the resolved view
+    (empty when the pair's frame length or fps could not be derived — a
+    directive needing them then fails that pair with a clear error)."""
+    subs = {}
+    fps = (view or {}).get("fps")
+    rows = (view or {}).get("pairs") or []
+    frames = rows[i].get("frames") if i < len(rows) and rows[i] else None
+    if frames and fps:
+        subs.update(FRAMES=int(frames), FPS=fps, DUR=f"{frames / fps:.2f}")
+    return subs
+
+
+def _pairs_pair_facts(subs):
+    """Clip facts for the user message, so a directive can steer with the
+    real length even without using {{DUR}} in its output."""
+    return ({"frames": subs["FRAMES"], "fps": subs["FPS"],
+             "seconds": subs["DUR"]} if subs.get("DUR") else None)
+
+
+def _pairs_manifest_write(staging, manifest):
+    (staging / "manifest.json").write_text(json.dumps(manifest, indent=2))
+
+
+SYNTH_RUN = {"running": False, "sid": None, "done": 0, "total": 0,
+             "current": None, "errors": [], "skipped": []}
+_SYNTH_LOCK = threading.Lock()        # serializes run attempts
+
+def _pairs_synth_worker(sid, work, ep, model, dtext, timeout):
+    """Bulk runner: sequential vision calls (a local LLM serves one request at
+    a time). Each pair is described from a manifest snapshot, but the result
+    is written back onto a FRESH re-read — only that pair's prompt fields
+    change — so dashboard edits made during a (slow) LLM call survive, and a
+    pair deleted or reordered mid-run is skipped rather than mis-described."""
+    staging = _pairs_dir(sid)
+
+    def find(manifest, item):
+        return next((p for p in manifest.get("pairs", [])
+                     if p.get("first") == item["first"]
+                     and p.get("last") == item["last"]), None)
+
+    for n, item in enumerate(work):
+        SYNTH_RUN["current"] = {"n": n + 1, "pair": item["i"] + 1}
+        try:
+            manifest = json.loads((staging / "manifest.json").read_text())
+            pair = find(manifest, item)
+            if pair is None:
+                SYNTH_RUN["skipped"].append(
+                    {"pair": item["i"] + 1, "reason": "pair removed"})
+                continue
+            msgs = ltxq.pairs_pair_messages(
+                pair, staging, manifest.get("shared_prompt"), dtext,
+                facts=item.get("facts"))
+            txt = ltxq.llm_fill_placeholders(
+                ltxq.llm_chat(ep["base_url"], model, msgs,
+                              timeout=timeout).strip(),
+                item.get("subs") or {})
+            if not txt:
+                raise ltxq.LLMError("LLM returned an empty prompt")
+            manifest = json.loads((staging / "manifest.json").read_text())
+            pair = find(manifest, item)
+            if pair is None:
+                SYNTH_RUN["skipped"].append(
+                    {"pair": item["i"] + 1, "reason": "pair removed"})
+                continue
+            pair["prompt"], pair["prompt_src"] = txt, "llm"
+            _pairs_manifest_write(staging, manifest)
+        except ltxq.LLMError as e:            # one bad call never sinks the batch
+            SYNTH_RUN["errors"].append({"pair": item["i"] + 1, "error": str(e)})
+        except Exception as e:
+            SYNTH_RUN["errors"].append(
+                {"pair": item["i"] + 1, "error": f"{type(e).__name__}: {e}"})
+        SYNTH_RUN["done"] = n + 1
+    SYNTH_RUN.update(running=False, current=None)
+    print(f"[synth] {sid}: {SYNTH_RUN['done']}/{len(work)} pair(s) described, "
+          f"{len(SYNTH_RUN['errors'])} error(s), {len(SYNTH_RUN['skipped'])} skipped")
+
+@app.post("/api/pairs/<sid>/synth")
+def api_pairs_synth(sid):
+    """Describe pair transition(s) with the endpoint's vision model, steered
+    by a directive from the library (body `directive`; default follows the
+    pairs model — H3 gets the MiniMax FL2VA format). Body {index: N}
+    synthesizes one pair synchronously; body without an index runs all pairs
+    in a background thread. Bulk never overwrites a non-empty inline prompt
+    (your typed text) and skips pairs with unassigned stills."""
+    if not _pairs_sid_ok(sid):
+        return flask.jsonify(error="no such pairs session"), 404
+    d = flask.request.get_json(silent=True) or {}
+    manifest = json.loads((_pairs_dir(sid) / "manifest.json").read_text())
+    ep, model, dname, dtext, timeout, err = _pairs_llm_setup(
+        d, gen_model=(manifest.get("opts") or {}).get("model"))
+    if err:
+        return flask.jsonify(error=err), 400
+    single = d.get("index") is not None
+    if single:
+        try:
+            i = int(d["index"])
+        except (TypeError, ValueError):
+            return flask.jsonify(error="invalid index"), 400
+        if not (0 <= i < len(manifest.get("pairs") or [])):
+            return flask.jsonify(error="index out of range"), 400
+        c, con = ltxq.conf(), ltxq.db()
+        try:
+            view0 = _pairs_payload(c, con, sid, manifest)["view"]
+        finally:
+            con.close()
+        subs = _pairs_pair_subs(view0, i)
+        with _SYNTH_LOCK:
+            if SYNTH_RUN["running"]:
+                return flask.jsonify(error="a synthesis run is already active"), 409
+            try:
+                txt = ltxq.pairs_describe_pair(
+                    manifest["pairs"][i], _pairs_dir(sid),
+                    manifest.get("shared_prompt"), ep["base_url"], model,
+                    dtext, timeout=timeout,
+                    facts=_pairs_pair_facts(subs), subs=subs)
+                manifest["pairs"][i]["prompt"] = txt
+                manifest["pairs"][i]["prompt_src"] = "llm"
+            except ltxq.LLMError as e:
+                return flask.jsonify(error=str(e)), 502
+            manifest["llm_directive"] = dname
+            _pairs_manifest_write(_pairs_dir(sid), manifest)
+        c, con = ltxq.conf(), ltxq.db()
+        try:
+            payload = _pairs_payload(c, con, sid, manifest)
+        finally:
+            con.close()
+        return flask.jsonify(**payload)
+    c, con = ltxq.conf(), ltxq.db()
+    try:
+        view = _pairs_payload(c, con, sid, manifest)["view"]
+    finally:
+        con.close()
+    with _SYNTH_LOCK:
+        if SYNTH_RUN["running"]:
+            return flask.jsonify(error="a synthesis run is already active"), 409
+        work = []
+        for i, p in enumerate(manifest.get("pairs") or []):
+            if p.get("prompt_src") == "inline" and (p.get("prompt") or "").strip():
+                continue                       # never overwrite typed text
+            if not (p.get("first") and p.get("last")):
+                continue                       # nothing to describe yet
+            subs = _pairs_pair_subs(view, i)
+            work.append({"i": i, "first": p["first"], "last": p["last"],
+                         "subs": subs, "facts": _pairs_pair_facts(subs)})
+        if not work:
+            return flask.jsonify(error="nothing to describe — pairs lack "
+                                       "stills or already carry inline prompts"), 400
+        manifest = json.loads((_pairs_dir(sid) / "manifest.json").read_text())
+        manifest["llm_directive"] = dname      # provenance for the review UI
+        _pairs_manifest_write(_pairs_dir(sid), manifest)
+        SYNTH_RUN.update(running=True, sid=sid, done=0, total=len(work),
+                         current=None, errors=[], skipped=[])
+        threading.Thread(target=_pairs_synth_worker,
+                         args=(sid, work, ep, model, dtext, timeout),
+                         daemon=True).start()
+    return flask.jsonify(ok=True, total=len(work))
+
+@app.get("/api/pairs/<sid>/synth")
+def api_pairs_synth_status(sid):
+    """Progress of the bulk synthesis run (the UI polls this)."""
+    if not _pairs_sid_ok(sid):
+        return flask.jsonify(error="no such pairs session"), 404
+    return flask.jsonify(
+        running=SYNTH_RUN["running"] and SYNTH_RUN["sid"] == sid,
+        sid=SYNTH_RUN["sid"], done=SYNTH_RUN["done"], total=SYNTH_RUN["total"],
+        current=SYNTH_RUN["current"], errors=SYNTH_RUN["errors"],
+        skipped=SYNTH_RUN["skipped"])
+
+
 @app.get("/api/view/<jid>")
 def api_view(jid):
     if not jid_ok(jid):

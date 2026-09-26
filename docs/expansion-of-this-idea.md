@@ -297,6 +297,24 @@ This component is deliberately not keyframe-specific: the same prompt factory
 serves Idea 1 (per-segment prompts, e.g. from lyrics) and is the automated
 form of backlog Idea 5.
 
+> **Shipped (2026-09-26), pair-vision subset.** The helper stage is live for
+> pairs: named OpenAI-compatible endpoints in `llm.yaml` (Ollama / LM Studio,
+> localhost or LAN, no keys — one client, no per-provider code), the steering
+> directive ships as a **variant library** (`templates/llm_directives/`:
+> `ltx-default` + `minimax-h3-fl2va` distilled from the original MiniMax
+> guide; user-local variants next to hosts.yaml win by name, and the
+> model-matched default auto-picks H3 vs LTX), and synthesis writes into the
+> editable pairs manifest (`prompt_src: "llm"`, directive recorded as
+> `llm_directive`) — two-phase, reviewable by construction. Server-computed
+> `{{DUR}}`-style placeholders let variants demand exact alignment lines.
+> Bulk runs are sequential, skip inline-typed prompts and continue past
+> per-pair failures (the degradation rule). Deliberate deviations from the
+> sketch above: prompts are composed self-contained per pair (no context
+> carry — they must survive reordering), there is no hash cache (the
+> persisted manifest *is* the cache), and stage 1 is the dashboard only, no
+> CLI `--synthesize` yet. Text-only prompt enhancement is the planned phase
+> B on the same `llm_chat` client.
+
 ### Open questions
 
 Resolved while shipping (v1):
