@@ -1,6 +1,6 @@
 # HTTP API
 
-**API version: 1.6** (see [Versioning](#versioning) at the end).
+**API version: 1.7** (see [Versioning](#versioning) at the end).
 
 The dashboard, the native macOS app, and external job-composition tools are
 all clients of the same localhost API served by `ltxq.py ui` (Flask, in
@@ -103,7 +103,7 @@ Common form fields (all optional unless noted):
 | `name` | display name; defaults to the first prompt words |
 | `batch` | optional batch label (see above) |
 | `host` | pin to a host alias; empty = any free host |
-| `seed` / `new_seed` | explicit seed, or generate a fresh random one |
+| `seed` / `new_seed` | explicit seed, or generate a fresh random one; a negative seed means "random" (add: one generated seed, recorded; batch composers: random per segment) |
 | `frames` | engine frame-count override, passed through as `--frames <n>` (overrides the config's `numFrames`); empty = config default |
 | `ext` | `mov` (default), `mp4`, `png` |
 | `backend` | `oneshot` or `serve`; empty = host default |
@@ -146,6 +146,37 @@ error list and no jobs created.
 | `on_non_grid` | `round-up` (default: pad wav with silence), `round-down` (trim), `refuse` |
 
 Response: `{"jids": ["<id>", …], "report": "<planner/queue output>"}`.
+
+### `/api/pairs/*` — keyframe-pair batch sessions *(since API 1.7)*
+
+Two-phase counterpart of `ltxq add-pairs` (expansion-of-this-idea.md Idea 2):
+a folder is parsed into an **editable pair sequence** (the manifest, the
+model-independent truth), the dashboard edits it, and queueing re-validates
+server-side. Every endpoint answers
+`{"sid", "manifest", "view", "errors", "warnings"}` — `manifest` is what the
+client edits (stills palette + pair list with inline prompt texts and
+per-pair `frames_override`), `view` is what the chosen model/host derive
+(fps, grid, strategy, per-pair frames/fit/notes), `errors` block queueing.
+Changing model/host re-plans the view and keeps the edited manifest.
+
+| endpoint | meaning |
+|---|---|
+| `POST /api/pairs/preview` | stage a stills folder (uploaded `files` from a webkitdirectory picker, or `dir` = server-side path) and plan the pair sequence. Form fields: `model` (required), `host`, `order` (`number` default / `name`), `prompt` (shared fallback), `config_json`, `frames_per_pair`, `on_non_grid`, `batch` |
+| `POST /api/pairs/<sid>/folder` | append another folder's parsed pairs (mixed prefixes fine — order is explicit now) |
+| `POST /api/pairs/<sid>/images` | add single images to the stills palette |
+| `GET /api/pairs/<sid>` | re-fetch a session (refresh recovery) |
+| `PUT /api/pairs/<sid>/manifest` | autosave edits: `pairs` (reorder/delete/add, inline `prompt`, `frames_override`), `stills`, `opts` (model change re-plans), `shared_prompt` |
+| `POST /api/pairs/<sid>/queue` | re-validate and queue one job per pair; form: `ext`, `backend`, `seed`, `batch`. Refusal → 400 `{"error", "errors": [...]}`; success removes the staging dir |
+| `GET /api/pairs/<sid>/file/<name>` | a staged file (thumbnails) |
+| `POST /api/pairs/<sid>/discard` | drop the session and its staged files |
+
+Sessions stage into `jobs/_tmp/pairs_<sid>/` (8-hex `sid`) and are swept after
+7 days of inactivity. Structure errors (no numbered stills, duplicate numbers,
+mixed prefixes) come back in `errors`; gaps in still numbering are fine and
+companions stay dense (pair index 1..N−1). Soft gaps warn instead of
+blocking: an empty prompt, and a pair with one still missing (composed with
+the side it has — see cli-dialects.md). Only a pair with no stills at all
+blocks.
 
 ### `POST /api/regen/<jid>` (form)
 
@@ -306,6 +337,8 @@ data: {"hosts": [{"alias": "ltx-a", "worker_alive": true, ...}]}
   event. No existing endpoint changed.
 - **1.6** — adds `POST /api/add-batch` (audio-segment batch composer). No
   existing endpoint changed.
+- **1.7** — adds the `/api/pairs/*` keyframe-pair batch session endpoints
+  (staging, review/edit, queue). No existing endpoint changed.
 
 Changes are additive: new endpoints, new optional request fields, new
 response fields. Breaking changes would bump the major version and be

@@ -99,6 +99,15 @@ a { color:var(--acc); text-decoration:none; }
   font-size:12.5px; margin-top:4px; }
 .kv .k { color:var(--dim); }
 .kv > div:nth-child(even) { word-break:break-all; }
+.pairs-thumb { width:72px; height:40px; object-fit:cover; border-radius:4px;
+  display:block; background:#111; }
+#pairsrows td { vertical-align:top; padding:5px 6px; border-bottom:1px solid var(--edge); }
+#pairsrows textarea { width:100%; min-height:44px; }
+.pairspal { display:flex; flex-wrap:wrap; gap:4px; max-width:460px; }
+.seam { color:var(--warn); font-size:11px; white-space:nowrap; }
+.palthumb { position:relative; display:inline-block; }
+.palthumb button { position:absolute; top:-7px; right:-7px; padding:0 5px;
+  font-size:10px; line-height:1.6; }
 </style>
 </head>
 <body>
@@ -255,6 +264,79 @@ a { color:var(--acc); text-decoration:none; }
         <button type="submit">Queue batch</button>
         <button type="button" class="sec" id="bcopy" title="copy model, host, ext, seed, config and prompt from the New-job form">Copy from New job</button>
         <span class="sub" id="batchmsg"></span>
+      </div>
+    </form>
+  </div>
+
+    <h2>Pairs batch <span class="sub">(keyframe interpolation — one job per
+    consecutive still pair; parse, review the sequence, reorder/fix, queue)</span></h2>
+  <div class="card">
+    <form id="pairsform">
+      <div class="row">
+        <div style="flex:2; min-width:220px"><label>Model <span class="sub">(first — fixes fps,
+          the frame grid and how pairs compose)</span></label>
+          <select id="pmodel" required><option value="">loading…</option></select></div>
+        <div style="flex:1; min-width:120px"><label>Host</label>
+          <select id="phost" style="width:auto"><option value="">auto</option></select></div>
+        <div style="flex:1; min-width:90px"><label>Ext</label>
+          <select id="pext" style="width:auto">
+            <option>mov</option><option>mp4</option><option>png</option></select></div>
+        <div style="flex:1; min-width:100px"><label>Backend</label>
+          <select id="pbackend" style="width:auto">
+            <option value="">oneshot</option><option value="serve">serve</option></select></div>
+      </div>
+      <div class="row" style="margin-top:4px">
+        <div class="grow" style="min-width:240px"><label>Stills folder (on this machine)</label>
+          <input id="pdir" class="mono" placeholder="/path/to/stills"></div>
+        <div style="min-width:260px"><label>…or drop the folder here / pick it — it parses
+          into the pair sequence below</label>
+          <div class="filerow"><label class="filedrop" tabindex="0" data-dz="pairsdir">
+            <input type="file" id="pairsseg" webkitdirectory multiple>
+            <span class="dz-label">choose folder (uploads the files)</span></label>
+            <button type="button" class="sec" data-clear="pairsdir" title="clear selected folder" hidden><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div></div>
+        <div><label>&nbsp;</label><br><button type="submit">Parse folder</button></div>
+      </div>
+      <div id="pairsbadge" class="sub" style="margin-top:6px"></div>
+      <div id="pairsReview" hidden>
+        <div id="pairsWarn" class="sub" style="margin:6px 0"></div>
+        <table><thead><tr><th>#</th><th>first → last</th><th>prompt</th>
+          <th>length</th><th>sidecars</th><th></th></tr></thead>
+          <tbody id="pairsrows"></tbody></table>
+        <div class="row" style="margin-top:8px">
+          <div><label>Build a pair</label>
+            <button type="button" class="sec" id="pairsAddPair"
+              title="append an empty pair at the end, then assign its first and last still from the palette dropdowns">+
+              add pair at end</button></div>
+          <div><label>Palette — stills not in any pair</label>
+            <div id="pairsPalette" class="pairspal"></div>
+            <button type="button" class="sec" id="pairsPalClear" hidden
+              title="remove all unused stills from the session">clear palette</button></div>
+          <div style="min-width:200px"><label>+ add images</label>
+            <input type="file" id="pairsImages" accept="image/*" multiple></div>
+          <div style="min-width:200px"><label>+ add another folder (appends its pairs)</label>
+            <input type="file" id="pairsFolder" webkitdirectory multiple></div>
+        </div>
+      </div>
+      <label style="margin-top:10px">Shared prompt — used for pairs without a numbered
+        <span class="mono">.txt</span> sidecar (editable per pair once parsed)</label>
+      <textarea id="pprompt" style="min-height:56px"></textarea>
+      <div class="row" style="margin-top:10px">
+        <div><label>Frames per pair unless overridden</label>
+          <input id="pframes" type="number" style="width:110px" placeholder="template"></div>
+        <div><label>Non-grid audio (8n+1 LTX/WAN · 17n+5 H3)</label>
+          <select id="ponnongrid" style="width:auto">
+            <option value="round-up">round up + silence pad</option>
+            <option value="round-down">round down + trim</option>
+            <option value="refuse">refuse the batch</option></select></div>
+        <div><label>Seed</label><input id="pseed" type="number" style="width:110px"></div>
+        <div><label>Batch label</label><input id="pbatch" placeholder="default: folder name"></div>
+        <div><label>Config JSON overlay</label><input id="pcfg" class="mono"
+          placeholder='{"steps": 9} — optional'></div>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button type="button" id="pairsQueue" disabled>Queue batch</button>
+        <button type="button" class="sec" id="pairsDiscard" hidden>Discard session</button>
+        <span class="sub" id="pairsmsg"></span>
       </div>
     </form>
   </div>
@@ -970,7 +1052,7 @@ connectEvents();
 function syncHostOptions(hosts) {
   const want = '<option value="">auto (hosts.yaml order)</option>' +
     hosts.map(h => `<option>${esc(h.alias)}</option>`).join("");
-  for (const id of ["host", "bhost"]) {
+  for (const id of ["host", "bhost", "phost"]) {
     const sel = $(id);
     if (sel.dataset.opts === want) continue;   // option set unchanged
     const keep = sel.value;
@@ -989,7 +1071,8 @@ async function loadModels(alias, target = "both") {
     syncHostOptions(st.hosts);
     lastHosts = st.hosts || []; updateDialectHint();
   } catch (e) {}
-  const msg = target === "batch" ? $("batchmsg") : $("addmsg");
+  const msg = target === "batch" ? $("batchmsg")
+            : target === "pairs" ? $("pairsmsg") : $("addmsg");
   try {
     const m = await api("/api/models/" + (alias || "ltx-a"));
     const opts = m.models.map(x =>
@@ -997,6 +1080,7 @@ async function loadModels(alias, target = "both") {
       || '<option value="">none downloaded</option>';
     if (target !== "batch") $("model").innerHTML = opts;
     if (target !== "job")   $("bmodel").innerHTML = opts;
+    if (target === "both" || target === "pairs") $("pmodel").innerHTML = opts;
     if (m.error) msg.textContent = "models: " + m.error;
   } catch (e) { msg.textContent = e.message; }
 }
@@ -1175,6 +1259,256 @@ $("batchform").onsubmit = async ev => {
     refresh();
   } catch (e) { $("batchmsg").textContent = ""; flash(e.message, true); }
 };
+
+// ---- pairs batch: parse a stills folder into an editable keyframe pair ----
+// sequence (Idea 2). Model-first: model/host fix fps, the frame grid and the
+// composition strategy; the manifest is the editable truth and every mutation
+// autosaves via PUT /api/pairs/<sid>/manifest (append-then-move, no inserts).
+let pairsSid = localStorage.getItem("ltxq.pairs_sid") || null;
+let pairsData = null;          // last payload {sid, manifest, view, errors, warnings}
+let pairsFiles = [];           // first folder picked/dropped for parsing
+let pairsSaveT = null;
+const pdz = document.querySelector('[data-dz="pairsdir"]');
+const pinp = $("pairsseg");
+function pairsSync() {
+  const imgs = pairsFiles.filter(f => /\.(png|jpe?g|webp)$/i.test(f.name)).length;
+  pdz.classList.toggle("filled", !!pairsFiles.length);
+  pdz.querySelector(".dz-label").textContent = pairsFiles.length
+    ? `${pairsFiles.length} files (${imgs} images)` : "choose folder (uploads the files)";
+  document.querySelector('[data-clear="pairsdir"]').hidden = !pairsFiles.length;
+}
+pinp.addEventListener("change", () => { pairsFiles = [...pinp.files]; pairsSync(); });
+pdz.addEventListener("dragover", e => {
+  if (![...e.dataTransfer.types].includes("Files")) return;
+  e.preventDefault(); pdz.classList.add("over");
+});
+pdz.addEventListener("dragleave", () => pdz.classList.remove("over"));
+pdz.addEventListener("drop", async e => {
+  pdz.classList.remove("over");
+  const items = [...(e.dataTransfer.items || [])];
+  if (!items.length) return;                     // non-file drag: leave alone
+  e.preventDefault();
+  const out = [];
+  for (const it of items) {
+    const en = it.webkitGetAsEntry && it.webkitGetAsEntry();
+    if (en) await collectDropped(en, out);
+    else if (it.kind === "file" && it.getAsFile()) out.push(it.getAsFile());
+  }
+  if (out.length) { pairsFiles = out; pairsSync(); }
+});
+document.querySelector('[data-clear="pairsdir"]').onclick = () => {
+  pairsFiles = []; pinp.value = ""; pairsSync();
+};
+$("phost").onchange = () => loadModels($("phost").value, "pairs");
+function pairsOpts(fd) {
+  fd.set("model", $("pmodel").value);
+  if ($("phost").value) fd.set("host", $("phost").value);
+  if ($("pcfg").value.trim()) fd.set("config_json", $("pcfg").value);
+  if ($("pprompt").value.trim()) fd.set("prompt", $("pprompt").value);
+  if ($("pframes").value) fd.set("frames_per_pair", $("pframes").value);
+  fd.set("on_non_grid", $("ponnongrid").value);
+  if ($("pbatch").value) fd.set("batch", $("pbatch").value);
+}
+$("pairsform").onsubmit = async ev => {          // parse folder → preview
+  ev.preventDefault();
+  const fd = new FormData(); pairsOpts(fd);
+  if (pairsFiles.length) {
+    for (const f of pairsFiles) fd.append("files", f, f.name);
+  } else if ($("pdir").value.trim()) {
+    fd.set("dir", $("pdir").value.trim());
+  } else return flash("pick a stills folder or enter its path", true);
+  $("pairsmsg").textContent = "parsing…";
+  try {
+    pairsApply(await api("/api/pairs/preview", {method:"POST", body:fd}));
+  } catch (e) { $("pairsmsg").textContent = ""; flash(e.message, true); }
+};
+function pairsApply(payload) {                   // store + render a payload
+  pairsData = payload;
+  pairsSid = payload.sid;
+  localStorage.setItem("ltxq.pairs_sid", pairsSid);
+  pairsRender();
+}
+const pairThumb = name => name
+  ? `<img class="pairs-thumb" loading="lazy" alt="${esc(name)}" title="${esc(name)}"
+       src="/api/pairs/${pairsSid}/file/${encodeURIComponent(name)}">`
+  : "";
+function pairsRender() {
+  const m = pairsData && pairsData.manifest, v = pairsData && pairsData.view;
+  $("pairsReview").hidden = !m;
+  $("pairsDiscard").hidden = !m;
+  $("pairsQueue").disabled = !m || !m.pairs.length ||
+    (pairsData.errors || []).length > 0;
+  if (!m) { $("pairsmsg").textContent = ""; return; }
+  $("pairsbadge").textContent = v
+    ? `${v.model} · ${v.grid} grid${v.fps ? " · " + v.fps + " fps" : ""} · pairs compose as ${v.strategy}`
+      + (v.strategy === "canvas_ref" ? " (end frame steered, not pinned)" : "")
+    : "";
+  const errs = pairsData.errors || [];
+  const trunc = s => s.length > 90 ? s.slice(0, 90) + "…" : s;
+  $("pairsQueue").title = !m || !m.pairs.length
+    ? "parse a folder and build pairs first"
+    : errs.length ? `blocked: ${errs[0]}` : "";
+  $("pairsmsg").textContent = !m ? ""
+    : errs.length ? `${errs.length} blocker(s) — ${trunc(errs[0])}`
+    : m.pairs.length ? `${m.pairs.length} pair(s) · ${m.stills.length} stills` : "";
+  $("pairsWarn").textContent =
+    [...(pairsData.errors || []), ...(pairsData.warnings || [])].join(" · ");
+  const used = new Set();
+  m.pairs.forEach(p => { if (p.first) used.add(p.first); if (p.last) used.add(p.last); });
+  const pal = m.stills.filter(s => !used.has(s));
+  $("pairsPalette").innerHTML = pal.map(s =>
+    `<span class="palthumb">${pairThumb(s)}<button type="button" class="sec"
+       title="remove from palette" data-act="paldel" data-name="${esc(s)}">✕</button></span>`).join("")
+    || (m.stills.length
+        ? '<span class="sub">every still is in a pair</span>'
+        : '<span class="sub">palette empty — parse a folder or add images</span>');
+  $("pairsPalClear").hidden = !pal.length;
+  const vp = (v && v.pairs) || [];
+  $("pairsrows").innerHTML = m.pairs.map((p, i) => {
+    const pv = vp[i] || {};
+    const seam = i > 0 && m.pairs[i - 1].last && p.first &&
+                 m.pairs[i - 1].last !== p.first;
+    const slot = (n, k) => n
+      ? `<span class="palthumb">${pairThumb(n)}<button type="button" class="sec"
+           title="remove from this pair (back to the palette)" data-act="unassign"
+           data-k="${k}" data-i="${i}">✕</button></span>`
+      : `<select data-act="assign" data-k="${k}" data-i="${i}">
+           <option value="">assign still…</option>` +
+         m.stills.map(s => `<option>${esc(s)}</option>`).join("") + `</select>`;
+    const dur = pv.frames && v && v.fps ? ` · ${(pv.frames / v.fps).toFixed(2)} s` : "";
+    return `<tr>
+      <td>${i + 1}${seam ? '<div class="seam" title="no shared still — a visible cut, not a join">⚠ seam</div>' : ""}</td>
+      <td>${slot(p.first, "first")}<div class="sub">→</div>${slot(p.last, "last")}</td>
+      <td><textarea data-act="prompt" data-i="${i}" rows="2"
+            placeholder="prompt for this pair">${esc(p.prompt)}</textarea>
+          <div class="sub">${esc(p.prompt_src || "no prompt yet")}</div></td>
+      <td><input type="number" data-act="frames" data-i="${i}" style="width:90px"
+            value="${p.frames_override || ""}" placeholder="${pv.frames || "template"}">
+          <div class="sub">${pv.frames || "—"} frames${dur}</div></td>
+      <td class="sub">${[p.config, p.audio].filter(Boolean).map(esc).join("<br>") || "—"}</td>
+      <td><button type="button" class="sec" data-act="up" data-i="${i}"${i ? "" : " disabled"}>↑</button>
+          <button type="button" class="sec" data-act="down" data-i="${i}"${i < m.pairs.length - 1 ? "" : " disabled"}>↓</button>
+          <button type="button" class="sec" data-act="del" data-i="${i}">✕</button></td>
+    </tr>`;
+  }).join("");
+}
+async function pairsSave(body, rerender = true) {
+  try {
+    const payload = await api(`/api/pairs/${pairsSid}/manifest`, {
+      method: "PUT", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body)});
+    pairsData = payload; pairsSid = payload.sid;
+    localStorage.setItem("ltxq.pairs_sid", pairsSid);
+    if (rerender) pairsRender();
+  } catch (e) { flash(e.message, true); }
+}
+$("pairsrows").addEventListener("click", e => {
+  const b = e.target.closest("button[data-act]");
+  if (!b) return;
+  const i = +b.dataset.i, ps = pairsData.manifest.pairs;
+  if (b.dataset.act === "up" && i > 0) [ps[i - 1], ps[i]] = [ps[i], ps[i - 1]];
+  else if (b.dataset.act === "down" && i < ps.length - 1) [ps[i + 1], ps[i]] = [ps[i], ps[i + 1]];
+  else if (b.dataset.act === "del") ps.splice(i, 1);
+  else if (b.dataset.act === "unassign") ps[i][b.dataset.k] = "";
+  else return;
+  pairsSave({pairs: ps});
+});
+$("pairsrows").addEventListener("change", e => {
+  const el = e.target.closest("[data-act]");
+  if (!el || el.tagName === "TEXTAREA") return;  // textarea: input handler
+  const p = pairsData.manifest.pairs[+el.dataset.i];
+  if (el.dataset.act === "assign") p[el.dataset.k] = el.value || "";
+  else if (el.dataset.act === "frames") p.frames_override = el.value ? +el.value : null;
+  else return;
+  pairsSave({pairs: pairsData.manifest.pairs});
+});
+$("pairsrows").addEventListener("input", e => {
+  const el = e.target.closest('[data-act="prompt"]');
+  if (!el) return;
+  const p = pairsData.manifest.pairs[+el.dataset.i];
+  if (p.prompt !== el.value) { p.prompt = el.value; p.prompt_src = "inline"; }
+  clearTimeout(pairsSaveT);
+  pairsSaveT = setTimeout(() => pairsSave({pairs: pairsData.manifest.pairs}, false), 700);
+});
+$("pairsPalette").addEventListener("click", e => {
+  const b = e.target.closest("button[data-act='paldel']");
+  if (!b || !pairsSid) return;
+  const m = pairsData.manifest;
+  m.stills = m.stills.filter(s => s !== b.dataset.name);
+  pairsSave({stills: m.stills});
+});
+$("pairsPalClear").onclick = () => {
+  if (!pairsSid) return;
+  const m = pairsData.manifest;
+  const used = new Set();
+  m.pairs.forEach(p => { if (p.first) used.add(p.first); if (p.last) used.add(p.last); });
+  m.stills = m.stills.filter(s => used.has(s));
+  pairsSave({stills: m.stills});
+};
+$("pairsAddPair").onclick = () => {
+  if (!pairsSid) return;
+  pairsData.manifest.pairs.push({first: "", last: "", prompt: "",
+    prompt_src: "", config: null, audio: null, frames_override: null});
+  pairsSave({pairs: pairsData.manifest.pairs});
+};
+$("pprompt").addEventListener("input", () => {
+  clearTimeout(pairsSaveT);
+  pairsSaveT = setTimeout(() => {
+    if (!pairsSid) return;
+    const m = pairsData.manifest, text = $("pprompt").value;
+    for (const p of m.pairs) {          // backfill pairs without their own prompt
+      if (p.prompt_src === "shared" || !p.prompt_src) {
+        if (text && !p.prompt) { p.prompt = text; p.prompt_src = "shared"; }
+        else if (!text && p.prompt_src === "shared") { p.prompt = ""; p.prompt_src = ""; }
+      }
+    }
+    pairsSave({pairs: m.pairs, shared_prompt: text});
+  }, 700);
+});
+$("pairsImages").addEventListener("change", async e => {
+  if (!e.target.files.length || !pairsSid) return;
+  const fd = new FormData();
+  for (const f of e.target.files) fd.append("files", f, f.name);
+  try { pairsApply(await api(`/api/pairs/${pairsSid}/images`, {method:"POST", body:fd})); }
+  catch (err) { flash(err.message, true); }
+  e.target.value = "";
+});
+$("pairsFolder").addEventListener("change", async e => {
+  if (!e.target.files.length || !pairsSid) return;
+  const fd = new FormData();
+  for (const f of e.target.files) fd.append("files", f, f.name);
+  $("pairsmsg").textContent = "parsing folder…";
+  try { pairsApply(await api(`/api/pairs/${pairsSid}/folder`, {method:"POST", body:fd})); }
+  catch (err) { flash(err.message, true); }
+  e.target.value = "";
+});
+$("pairsQueue").onclick = async () => {
+  const fd = new FormData();
+  fd.set("ext", $("pext").value);
+  if ($("pbackend").value) fd.set("backend", $("pbackend").value);
+  if ($("pseed").value) fd.set("seed", $("pseed").value);
+  if ($("pbatch").value) fd.set("batch", $("pbatch").value);
+  $("pairsmsg").textContent = "queueing…";
+  try {
+    const r = await api(`/api/pairs/${pairsSid}/queue`, {method:"POST", body:fd});
+    flash(`pairs batch queued: ${r.jids.length} job(s)`);
+    pairsForget(); refresh();
+  } catch (e) {
+    $("pairsmsg").textContent = "";
+    flash(e.message, true);
+    if (pairsSid) api(`/api/pairs/${pairsSid}`).then(pairsApply).catch(() => {});
+  }
+};
+function pairsForget() {
+  pairsSid = null; pairsData = null; pairsFiles = []; pairsSync();
+  localStorage.removeItem("ltxq.pairs_sid");
+  pairsRender();
+}
+$("pairsDiscard").onclick = async () => {
+  try { await api(`/api/pairs/${pairsSid}/discard`, {method:"POST"}); } catch (e) {}
+  pairsForget();
+};
+if (pairsSid) api(`/api/pairs/${pairsSid}`).then(pairsApply).catch(() => pairsForget());
 
 // ---- settings & server status overlay (gear button next to the engine badge) ----
 // Shows the components the server actually uses (ffmpeg/ffprobe: presence,

@@ -4,6 +4,80 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
 
 ## [Unreleased] - 2026-09-25
 
+### Feature: keyframe-pair batch composer (`add-pairs` + Pairs batch panel)
+
+- **`ltxq.py`**: Idea 2 graduates from docs/expansion-of-this-idea.md —
+  `ltxq add-pairs <dir>` plans one independent job per consecutive still pair
+  (`--first-frame`/`--last-frame`, parallel dispatch) from a folder of
+  stills. Ordering rules tolerate gaps, non-padded and shuffled filenames
+  (`--order number` default; duplicate numbers and mixed prefixes refuse;
+  unnumbered stills refuse with a rename hint; `--order name` overrides).
+  Per-pair companions by pair index (`promptNNNN.txt`/`configNNNN.json`/
+  `audioNNNN.wav`, integer matching, orphans warn); per-pair frame length
+  precedence: explicit override (grid-snapped, ties up) > audio sidecar
+  (ffprobe × fps, snapped, wav fitted) > config `numFrames` >
+  `--frames-per-pair` > template. All-or-nothing validation, batch label from
+  the folder, `pair-0001` job names. The pinned host's dialect picks the
+  composition strategy: `frame_slots` (dtcustom) or `canvas_ref` (dtofficial,
+  repeated `--image`, end frame steered not pinned — unpinned jobs always
+  compose as `frame_slots` so a multi-image pair can never land on the
+  dtcustom engine's >1 `--image` crash).
+- **`server.py`**: `/api/pairs/*` (API 1.7) — two-phase sessions:
+  `preview` stages a folder and plans the sequence, `folder`/`images` append,
+  `PUT /manifest` autosaves edits (reorder/delete/add pair, inline prompts,
+  length overrides, model-change re-plans), `queue` re-validates server-side
+  before queueing, plus `file/<name>` thumbnails, `discard`, and a 7-day
+  staging GC. Fix: the last-done-job config fallback (shared with
+  `/api/add-batch`'s behavior) now actually writes the staged `cfg_*.json`.
+- **`static/index.html` / `static/index-next.html`**: new Pairs batch panel
+  (a third tab at `/next`): model-first badge (fps, grid, strategy),
+  parse → editable pair sequence (↑/↓/✕, append-and-move inserts, palette
+  assignment, inline per-pair prompts, per-pair length with effective
+  frames/duration, seam badges), session autosave + refresh recovery,
+  server-refused errors surfaced inline.
+  Follow-up from first real use: **"+ add pair at end"** builds a pair by
+  hand from palette stills (two assign dropdowns on the empty row — the
+  button had been missing, making palette stills unpairable), **per-thumb ✕
+  and a clear-palette button** manage the staging pool, **every filled pair
+  slot got its own ✕** (clears just that side of the pair — the still returns
+  to the palette, the row stays, and a half-emptied pair blocks queueing
+  until reassigned), and the resolver's per-still "unused still" warnings
+  collapse into one grouped entry.
+- **`ltxq.py` (seed fix)**: a negative `--seed` (the "-1 means random"
+  convention) no longer reaches the engine — `add` replaces it with a
+  generated, recorded random seed (printed), while `add-batch` and
+  `add-pairs` treat it as "random per segment/pair" (no `--seed` flag).
+  Passing `--seed -1` used to fail the generation at the engine.
+- **`ltxq.py` (gating relaxation)**: empty prompts and one-sided pairs now
+  WARN instead of blocking the batch — a pair with only a last still composes
+  as a lone `--last-frame` (end pinned, start free; unvalidated), only a
+  first still rides as `--image` (a lone `--first-frame` is documented
+  invalid), and on `canvas_ref` the remaining still becomes the canvas image.
+  Still blocking: a pair with no stills at all, a referenced still missing
+  from disk, broken config/audio companions, no frame-length source, and the
+  structural refusals (no numbered stills, duplicate numbers, mixed
+  prefixes). The **Queue batch button now says why it
+  is disabled** (blocker count + first blocking error, next to the button and
+  as its tooltip), and typing in the **Shared prompt box live-backfills every
+  pair that has no prompt of its own** — a sidecar-less folder no longer
+  strands the whole batch at "no prompt" after parsing.
+- **`tests/`**: `test_pairs.py` (38 composer tests — ordering, companions,
+  precedence, strategy split, regen round-trips, CLI refusal) and
+  `test_pairs_api.py` (8 endpoint tests incl. the config-fallback
+  regression); `test_frontends.py` gains `pairsform`/`/api/pairs/`/`phost`
+  markers and the `panel-pairs`/`tab-pairs` shell ids.
+- **`docs/`**: features.md, api.md (1.7), cli-dialects.md (pair strategies),
+  expansion-of-this-idea.md (Idea 2 → Done v1).
+- **Re-test with the next community CLI release**: the pairs composer ships
+  compositions the current tod-dt-cli build has never validated against a
+  real render — one-sided pairs (a lone `--last-frame`; `--image` as the
+  start-pinned fallback for a missing last) and the `canvas_ref`
+  two-`--image` path on dtofficial hosts (the dtcustom engine still crashes
+  on more than one `--image` upstream — see the WIP note below). When the
+  next CLI lands: re-run `tests/test_pairs.py` / `test_pairs_api.py` plus one
+  real render of each composition, and refresh the dialect drift snapshots
+  (`ltxq flags --update`) if its generate surface moved.
+
 ### Fix: audio-batch Model dropdown now follows its own Host select
 
 - **`static/index.html` / `static/index-next.html`**: the audio-batch panel's
