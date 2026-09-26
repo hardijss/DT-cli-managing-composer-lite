@@ -76,6 +76,33 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
   unmodified text) — the source material for distilling further variants;
   the shipped directives double as worked examples.
 
+### Feature: prompt enhancement buttons (the helper stage, phase B)
+
+- **`ltxq.py`**: `llm_default_directive(model, kind=)` gains the
+  "enhance" kind — text-only prompt-improvement directives `enhance-ltx`
+  and `enhance-minimax-h3` (a T2VA distillation of the base guide: single
+  `[Shot 1]`, three fields, camera vocabulary, verbatim dialogue in `<d>`).
+  Shipped next to the pair-vision variants in `templates/llm_directives/`.
+- **`server.py`**: `POST /api/llm/enhance` — synchronous text-only chat
+  call; body `{text, gen_model, endpoint, model, directive?}`; the default
+  directive follows the target generation model (H3 → the T2VA rewrite
+  format), 8000-char draft cap, LLM errors → 502. Returns the rewritten
+  text; nothing is stored server-side.
+- **`static/index.html` / `index-next.html`**: ✨ enhance buttons on all
+  three prompt surfaces — the main add form, the pairs shared prompt, and
+  each per-pair row — with one-click ↺ undo. The per-pair undo map follows
+  reorder/delete so ↺ always restores the right pair; enhancement marks the
+  pair prompt `prompt_src: "inline"` (user-owned text). Uses the pairs
+  panel's endpoint/model selection.
+- **`docs/reference/`**: `minimax-full-reference-guide.md` added (the H3
+  full-reference rewrite format: subject_definitions / summary /
+  retention_analysis / detailed_description + reference labels — source
+  material for future reference-heavy H3 directives), and
+  `ltx-prompting-notes.md` (LTX 2.x prompting good practices from
+  Lightricks' official guidance; notes that the shipped LTX directives are
+  deliberately terser than LTX-2's elaborate-prompt advice, with a v2
+  recipe).
+
 ## [Unreleased] - 2026-09-25
 
 ### Feature: keyframe-pair batch composer (`add-pairs` + Pairs batch panel)

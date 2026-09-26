@@ -46,6 +46,10 @@ ltxq._wav_duration = lambda p: 4.84            # 121 frames @ 25 fps
     "TEST DEFAULT DIRECTIVE — describe the transition.")
 (TMP / "templates" / "llm_directives" / "dur-test.txt").write_text(
     "aligns with the {{DUR}}-second mark")
+(TMP / "templates" / "llm_directives" / "enhance-ltx.txt").write_text(
+    "TEST ENHANCE LTX")
+(TMP / "templates" / "llm_directives" / "enhance-minimax-h3.txt").write_text(
+    "TEST ENHANCE H3")
 (TMP / "templates" / "ltx-2-dev.json").write_text(json.dumps(
     {"width": 128, "height": 128, "fps": 25, "numFrames": 121}))
 (TMP / "jobs" / "_tmp").mkdir(parents=True)
@@ -202,7 +206,9 @@ class LLMClientTests(LLMBase):
 class LLMDirectiveTests(LLMBase):
     def test_library_and_user_override_wins(self):
         dirs = ltxq.llm_directives()
-        self.assertEqual([d["name"] for d in dirs], ["dur-test", "ltx-default"])
+        self.assertEqual([d["name"] for d in dirs],
+                         ["dur-test", "enhance-ltx", "enhance-minimax-h3",
+                          "ltx-default"])
         txt, meta, err = ltxq.llm_directive("ltx-default")
         self.assertIsNone(err)
         self.assertEqual(txt, "TEST DEFAULT DIRECTIVE — describe the transition.")
@@ -240,7 +246,8 @@ class LLMDirectiveTests(LLMBase):
         self.assertEqual(r.status_code, 200)
         j = r.get_json()
         self.assertEqual([d["name"] for d in j["directives"]],
-                         ["dur-test", "ltx-default"])
+                         ["dur-test", "enhance-ltx", "enhance-minimax-h3",
+                          "ltx-default"])
         self.assertEqual(j["default"], "ltx-default")
         r = self.client.get("/api/llm/directives?model=minimax-h3-7b")
         self.assertEqual(r.get_json()["default"], "minimax-h3-fl2va")
@@ -283,6 +290,72 @@ class LLMDirectiveTests(LLMBase):
         self.assertIn("unreachable", r.get_json()["error"])
         r = self.client.get("/api/llm/models?endpoint=nope")
         self.assertEqual(r.status_code, 400)
+
+
+class LLMEnhanceTests(LLMBase):
+    def enhance(self, body):
+        return self.client.post("/api/llm/enhance", json=body)
+
+    def test_default_directive_follows_gen_model(self):
+        self.assertEqual(ltxq.llm_default_directive("minimax-h3-7b", kind="enhance"),
+                         "enhance-minimax-h3")
+        self.assertEqual(ltxq.llm_default_directive("ltx-2-dev", kind="enhance"),
+                         "enhance-ltx")
+        self.assertEqual(ltxq.llm_default_directive(None, kind="enhance"),
+                         "enhance-ltx")
+
+    def test_enhance_round_trip_and_directive_choice(self):
+        seen = {}
+
+        def fake_chat(base_url, model, messages, timeout=120, temperature=0.3):
+            seen["system"] = messages[0]["content"]
+            return "  A sharper rewrite.  "
+
+        orig = ltxq.llm_chat
+        ltxq.llm_chat = fake_chat
+        try:
+            r = self.enhance({"text": "a cat", "gen_model": "ltx-2-dev",
+                              "endpoint": "test-llm", "model": "m"})
+            self.assertEqual(r.status_code, 200)
+            j = r.get_json()
+            self.assertEqual(j["text"], "A sharper rewrite.")   # stripped
+            self.assertEqual(j["directive"], "enhance-ltx")
+            self.assertEqual(seen["system"], "TEST ENHANCE LTX")
+            r = self.enhance({"text": "a cat", "gen_model": "minimax-h3-7b",
+                              "endpoint": "test-llm", "model": "m"})
+            self.assertEqual(r.get_json()["directive"], "enhance-minimax-h3")
+            r = self.enhance({"text": "a cat", "endpoint": "test-llm",
+                              "model": "m", "directive": "enhance-ltx"})
+            self.assertEqual(r.get_json()["directive"], "enhance-ltx")
+        finally:
+            ltxq.llm_chat = orig
+
+    def test_enhance_bad_inputs_and_errors(self):
+        r = self.enhance({"text": "   "})
+        self.assertEqual(r.status_code, 400)
+        r = self.enhance({"text": "x" * 8001})
+        self.assertEqual(r.status_code, 400)
+        r = self.enhance({"text": "x", "endpoint": "nope"})
+        self.assertEqual(r.status_code, 400)
+        r = self.enhance({"text": "x", "endpoint": "test-llm"})
+        self.assertEqual(r.status_code, 400)          # no model anywhere
+        self.assertIn("no model chosen", r.get_json()["error"])
+        orig = ltxq.llm_chat
+        ltxq.llm_chat = lambda *a, **k: (_ for _ in ()).throw(
+            ltxq.LLMError("LLM unreachable at http://x"))
+        try:
+            r = self.enhance({"text": "x", "endpoint": "test-llm", "model": "m"})
+        finally:
+            ltxq.llm_chat = orig
+        self.assertEqual(r.status_code, 502)
+        self.assertIn("unreachable", r.get_json()["error"])
+        orig = ltxq.llm_chat
+        ltxq.llm_chat = lambda *a, **k: "   "         # blank reply
+        try:
+            r = self.enhance({"text": "x", "endpoint": "test-llm", "model": "m"})
+        finally:
+            ltxq.llm_chat = orig
+        self.assertEqual(r.status_code, 502)
 
 
 class PairsSynthTests(LLMBase):

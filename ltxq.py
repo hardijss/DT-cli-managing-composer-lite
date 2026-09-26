@@ -1777,6 +1777,8 @@ def llm_chat(base_url, model, messages, timeout=120, temperature=0.3):
 LLM_DIRECTIVES_DIR = "llm_directives"
 LLM_DEFAULT_DIRECTIVE = "ltx-default"
 LLM_H3_DIRECTIVE = "minimax-h3-fl2va"
+LLM_ENHANCE_DEFAULT = "enhance-ltx"
+LLM_ENHANCE_H3 = "enhance-minimax-h3"
 
 def llm_directives():
     """The directive library: named instruction variants the synthesis calls
@@ -1806,12 +1808,15 @@ def llm_directive(name=None):
     except OSError as e:
         return "", meta, f"cannot read {meta['path']}: {e}"
 
-def llm_default_directive(model=None):
-    """Directive id matching a generation model: the H3 family speaks the
-    MiniMax prompt format (same sniff as the frame grid), everything else
-    gets the LTX default."""
-    return LLM_H3_DIRECTIVE if frame_grid(model)[0] == 17 \
-        else LLM_DEFAULT_DIRECTIVE
+def llm_default_directive(model=None, kind="synth"):
+    """Directive id matching a generation model. kind "synth" picks the
+    pair-vision directive, "enhance" the text-only prompt-improvement one;
+    the H3 family speaks the MiniMax format (same sniff as the frame grid),
+    everything else gets the LTX default."""
+    h3 = frame_grid(model)[0] == 17
+    if kind == "enhance":
+        return LLM_ENHANCE_H3 if h3 else LLM_ENHANCE_DEFAULT
+    return LLM_H3_DIRECTIVE if h3 else LLM_DEFAULT_DIRECTIVE
 
 LLM_PLACEHOLDER_RE = re.compile(r"\{\{([A-Z][A-Z0-9_]*)\}\}")
 

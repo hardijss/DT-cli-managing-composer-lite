@@ -45,6 +45,7 @@ FEATURE_MARKERS = (
     "plldir",                                       # ...its directive dropdown
     "/api/llm/",                                    # ...and its endpoint API
     "/api/llm/directives",                          # directive library in both
+    "/api/llm/enhance",                             # prompt enhancement in both
 )
 
 ID_RE = re.compile(r'id="([^"]+)"')

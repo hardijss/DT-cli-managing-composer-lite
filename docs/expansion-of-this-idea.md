@@ -312,8 +312,10 @@ form of backlog Idea 5.
 > sketch above: prompts are composed self-contained per pair (no context
 > carry — they must survive reordering), there is no hash cache (the
 > persisted manifest *is* the cache), and stage 1 is the dashboard only, no
-> CLI `--synthesize` yet. Text-only prompt enhancement is the planned phase
-> B on the same `llm_chat` client.
+> CLI `--synthesize` yet. Text-only prompt enhancement **shipped as phase B
+> (same day)**: ✨ buttons on the main form, the pairs shared prompt and
+> every per-pair prompt, model-matched `enhance-ltx` / `enhance-minimax-h3`
+> directives, one-click ↺ undo.
 
 ### Open questions
 

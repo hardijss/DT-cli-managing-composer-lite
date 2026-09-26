@@ -109,6 +109,13 @@
   second mark") without trusting the LLM with arithmetic. Prompts are
   self-contained by design (no cross-pair references), so reordering stays
   safe
+- **LLM prompt enhancement** (✨ buttons, all prompt surfaces): the main add
+  form, the pairs shared prompt, and every per-pair prompt can be rewritten
+  by a text-only `/api/llm/enhance` call — one-click ↺ undo restores the
+  previous text (per-pair undo survives reorder/delete). The directive is
+  model-matched too (`enhance-ltx` / `enhance-minimax-h3`, the latter a
+  T2VA-format distillation); enhanced pair prompts become user-owned
+  (`prompt_src: "inline"`). Uses the pairs panel's LLM endpoint/model
 
 ### CLI
 - `add/add-batch/ls/run/cancel/regen/check/probe/models/stage/reconcile/

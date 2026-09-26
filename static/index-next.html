@@ -154,6 +154,13 @@ a { color:var(--acc); text-decoration:none; }
     </div>
     <label>Prompt</label>
     <textarea id="prompt" required></textarea>
+    <div class="row" style="margin-top:4px">
+      <button type="button" class="sec" id="penh"
+        title="improve this prompt with the LLM (uses the pairs panel's LLM endpoint/model)">✨ enhance</button>
+      <button type="button" class="sec" id="penhundo" hidden
+        title="restore the text as it was before the enhancement">↺ undo</button>
+      <span class="sub" id="penhnote"></span>
+    </div>
     <label>Config JSON (overrides; leave empty to reuse last config)</label>
     <textarea id="config_json" class="mono" placeholder='{"steps": 9, "seed": 123}'></textarea>
     <div class="grid">
@@ -338,6 +345,12 @@ a { color:var(--acc); text-decoration:none; }
       <label style="margin-top:10px">Shared prompt — used for pairs without a numbered
         <span class="mono">.txt</span> sidecar (editable per pair once parsed)</label>
       <textarea id="pprompt" style="min-height:56px"></textarea>
+      <div class="row" style="margin-top:4px">
+        <button type="button" class="sec" id="ppenh"
+          title="improve the shared prompt with the LLM">✨ enhance</button>
+        <button type="button" class="sec" id="ppenhundo" hidden
+          title="restore the text as it was before the enhancement">↺ undo</button>
+      </div>
       <div class="row" style="margin-top:10px" id="pllmrow">
         <div><label>LLM endpoint (<span class="mono">llm.yaml</span>)</label>
           <select id="pllendp" style="width:auto"></select></div>
@@ -1419,7 +1432,10 @@ function pairsRender() {
             placeholder="prompt for this pair">${esc(p.prompt)}</textarea>
           <div class="sub">${esc(p.prompt_src || "no prompt yet")}</div>
           <button type="button" class="sec" data-act="llm" data-i="${i}"
-            title="describe this pair's first→last transition with the vision LLM">🪄 describe</button></td>
+            title="describe this pair's first→last transition with the vision LLM">🪄 describe</button>
+          <button type="button" class="sec" data-act="enh" data-i="${i}"${p.prompt.trim() ? "" : " disabled"}
+            title="improve this prompt with the LLM">✨</button>${enhUndo[i] ? `<button type="button" class="sec" data-act="enhundo" data-i="${i}"
+            title="restore the prompt as it was before the enhancement">↺</button>` : ""}</td>
       <td><input type="number" data-act="frames" data-i="${i}" style="width:90px"
             value="${p.frames_override || ""}" placeholder="${pv.frames || "template"}">
           <div class="sub">${pv.frames || "—"} frames${dur}</div></td>
@@ -1445,9 +1461,21 @@ $("pairsrows").addEventListener("click", e => {
   if (!b) return;
   const i = +b.dataset.i, ps = pairsData.manifest.pairs;
   if (b.dataset.act === "llm") { pairsSynthOne(i); return; }
-  if (b.dataset.act === "up" && i > 0) [ps[i - 1], ps[i]] = [ps[i], ps[i - 1]];
-  else if (b.dataset.act === "down" && i < ps.length - 1) [ps[i + 1], ps[i]] = [ps[i], ps[i + 1]];
-  else if (b.dataset.act === "del") ps.splice(i, 1);
+  if (b.dataset.act === "enh") { pairsEnhanceOne(i); return; }
+  if (b.dataset.act === "enhundo") { pairsEnhUndoOne(i); return; }
+  if (b.dataset.act === "up" && i > 0) {
+    [ps[i - 1], ps[i]] = [ps[i], ps[i - 1]];
+    [enhUndo[i - 1], enhUndo[i]] = [enhUndo[i], enhUndo[i - 1]];   // keep ↺ aligned
+  }
+  else if (b.dataset.act === "down" && i < ps.length - 1) {
+    [ps[i + 1], ps[i]] = [ps[i], ps[i + 1]];
+    [enhUndo[i + 1], enhUndo[i]] = [enhUndo[i], enhUndo[i + 1]];
+  }
+  else if (b.dataset.act === "del") {
+    ps.splice(i, 1);
+    delete enhUndo[i];
+    for (let k = i; k < ps.length; k++) { enhUndo[k] = enhUndo[k + 1]; delete enhUndo[k + 1]; }
+  }
   else if (b.dataset.act === "unassign") ps[i][b.dataset.k] = "";
   else return;
   pairsSave({pairs: ps});
@@ -1556,6 +1584,8 @@ let pllEndps = [];                 // llm.yaml profiles as the server sees them
 let pllDirs = [];                  // directive library (shipped + local overrides)
 let pllDirPicked = false;          // user overrode the model-matched default
 let synthT = null;
+const enhUndo = {};                // pair index -> {prompt, prompt_src} before ✨
+let ppEnhUndo = null;              // shared-prompt text before ✨
 function pairsSynthEnabled() {
   const m = pairsData && pairsData.manifest;
   const on = $("pllmm").selectedOptions[0];
@@ -1627,6 +1657,71 @@ $("plldir").onchange = () => { pllDirPicked = true; pllLoadTemplate(); };
 $("pmodel").addEventListener("change", () => {   // re-match the directive
   pllDirPicked = false; pllLoadDirectives();
 });
+
+// ---- LLM prompt enhancement (phase B): ✨ rewrites a draft prompt via the
+// text-only /api/llm/enhance call; ↺ restores the previous text. Uses the
+// same endpoint/model selection as pair synthesis.
+async function llmEnhanceCall(text, genModel) {
+  return api("/api/llm/enhance", {method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({text, gen_model: genModel,
+                          endpoint: $("pllendp").value, model: $("pllmm").value})});
+}
+$("penh").onclick = async () => {
+  const el = $("prompt"), orig = el.value.trim();
+  if (!orig) return flash("nothing to enhance", true);
+  $("penh").disabled = true; $("penhnote").textContent = "enhancing…";
+  try {
+    const r = await llmEnhanceCall(orig, $("model").value);
+    el._enhUndo = el.value; el.value = r.text;
+    $("penhundo").hidden = false;
+    $("penhnote").textContent = `enhanced via ${r.directive}`;
+  } catch (e) { flash(e.message, true); $("penhnote").textContent = ""; }
+  $("penh").disabled = false;
+};
+$("penhundo").onclick = () => {
+  if ($("prompt")._enhUndo === undefined) return;
+  $("prompt").value = $("prompt")._enhUndo;
+  delete $("prompt")._enhUndo;
+  $("penhundo").hidden = true; $("penhnote").textContent = "";
+};
+$("ppenh").onclick = async () => {
+  const el = $("pprompt"), orig = el.value.trim();
+  if (!orig) return flash("nothing to enhance", true);
+  $("ppenh").disabled = true;
+  try {
+    const r = await llmEnhanceCall(orig, $("pmodel").value);
+    ppEnhUndo = el.value; el.value = r.text;
+    el.dispatchEvent(new Event("input"));        // existing autosave path
+    $("ppenhundo").hidden = false;
+  } catch (e) { flash(e.message, true); }
+  $("ppenh").disabled = false;
+};
+$("ppenhundo").onclick = () => {
+  if (ppEnhUndo === null) return;
+  $("pprompt").value = ppEnhUndo; ppEnhUndo = null;
+  $("pprompt").dispatchEvent(new Event("input"));
+  $("ppenhundo").hidden = true;
+};
+async function pairsEnhanceOne(i) {
+  const p = pairsData.manifest.pairs[i], orig = (p.prompt || "").trim();
+  if (!orig) return flash("nothing to enhance — write a draft first", true);
+  try {
+    const r = await llmEnhanceCall(orig, $("pmodel").value);
+    enhUndo[i] = {prompt: p.prompt, prompt_src: p.prompt_src};
+    p.prompt = r.text; p.prompt_src = "inline";
+    await pairsSave({pairs: pairsData.manifest.pairs});
+    flash(`pair ${i + 1} prompt enhanced — ↺ restores the previous text`);
+  } catch (e) { flash(e.message, true); }
+}
+function pairsEnhUndoOne(i) {
+  const u = enhUndo[i];
+  if (!u) return;
+  const p = pairsData.manifest.pairs[i];
+  p.prompt = u.prompt; p.prompt_src = u.prompt_src;
+  delete enhUndo[i];
+  pairsSave({pairs: pairsData.manifest.pairs});
+}
 async function pairsSynthOne(i) {
   if (!pairsSid || !$("pllmm").value) return flash("pick a vision model first", true);
   $("pairsmsg").textContent = `describing pair ${i + 1}…`;

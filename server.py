@@ -1238,6 +1238,47 @@ def api_llm_template_put():
     return flask.jsonify(ok=True, name=name, template=txt, custom=True,
                          path=str(ddir / f"{name}.txt"))
 
+@app.post("/api/llm/enhance")
+def api_llm_enhance():
+    """Text-only prompt improvement (the enhance buttons): one synchronous
+    chat call steered by an enhance-* directive — the default follows the
+    target generation model (H3 gets the T2VA rewrite format). Returns the
+    rewritten text; nothing is stored, the client decides what to keep."""
+    d = flask.request.get_json(silent=True) or {}
+    text = str(d.get("text") or "").strip()
+    if not text:
+        return flask.jsonify(error="nothing to enhance"), 400
+    if len(text) > 8000:
+        return flask.jsonify(error="draft too long to enhance "
+                                   "(8000 char cap)"), 400
+    ep, timeout, err = ltxq.llm_endpoint((d.get("endpoint") or "").strip() or None)
+    if err:
+        return flask.jsonify(error=err), 400
+    model = (d.get("model") or "").strip() or ep.get("model") or ""
+    if not model:
+        return flask.jsonify(error="no model chosen — pick a vision model "
+                                   "in the pairs panel (or set model: on the "
+                                   "endpoint in llm.yaml)"), 400
+    explicit = (d.get("directive") or "").strip()
+    name = explicit or ltxq.llm_default_directive(
+        (d.get("gen_model") or "").strip() or None, kind="enhance")
+    txt, meta, terr = ltxq.llm_directive(name)
+    if terr and not explicit and name != ltxq.LLM_ENHANCE_DEFAULT:
+        name = ltxq.LLM_ENHANCE_DEFAULT
+        txt, meta, terr = ltxq.llm_directive(name)
+    if terr:
+        return flask.jsonify(error=terr), 400
+    messages = [{"role": "system", "content": txt},
+                {"role": "user", "content": "Draft prompt to improve:\n" + text}]
+    try:
+        out = ltxq.llm_chat(ep["base_url"], model, messages,
+                            timeout=timeout).strip()
+    except ltxq.LLMError as e:
+        return flask.jsonify(error=str(e)), 502
+    if not out:
+        return flask.jsonify(error="LLM returned an empty prompt"), 502
+    return flask.jsonify(text=out, directive=name)
+
 
 def _pairs_llm_setup(d, gen_model=None):
     """(endpoint, vision model, directive name, directive text, timeout_s,
