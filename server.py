@@ -2,7 +2,7 @@
 
 Run: ./venv/bin/python ltxq.py ui [--port 8765] [--no-engine]
 """
-import argparse, contextlib, gc, io, json, re, shlex, shutil, subprocess, sys, tempfile, threading, time
+import argparse, contextlib, gc, io, json, re, shlex, shutil, subprocess, sys, tempfile, threading, time, uuid
 from collections import deque
 from pathlib import Path
 from urllib.parse import urlparse
@@ -766,6 +766,411 @@ def api_add_batch():
     finally:
         if staged_dir:
             shutil.rmtree(staged_dir, ignore_errors=True)
+
+
+# --- keyframe-pair batch (ltxq add-pairs; docs/expansion-of-this-idea.md Idea 2)
+# Two-phase: /preview stages a stills folder and plans the pair sequence (the
+# model-independent manifest, the editable truth), the dashboard edits it
+# (autosaved via PUT), and /queue re-validates server-side before queueing.
+# Every response = {sid, manifest, view, errors, warnings}: manifest is what
+# the client edits, view is what the chosen model/host derive from it.
+
+PAIRS_SID_RE = re.compile(r"[0-9a-f]{8}\Z")
+
+def _pairs_dir(sid):
+    return STAGE / f"pairs_{sid}"
+
+def _pairs_sid_ok(sid):
+    return bool(PAIRS_SID_RE.match(sid or "")) and _pairs_dir(sid).is_dir()
+
+def _pairs_staged(staging, name):
+    """A manifest file reference must be a bare basename of a file that really
+    sits in this session's staging dir (never a path that could escape it)."""
+    p = staging / Path(name or "").name
+    return bool(name) and p.parent == staging and p.is_file()
+
+def _pairs_gc(max_age_s=7 * 86400):
+    """Prune abandoned pairs staging sessions (never queue-able again — the
+    files live on in the job dirs once queued)."""
+    now = time.time()
+    for p in STAGE.glob("pairs_*"):
+        if p.is_dir():
+            try:
+                if now - p.stat().st_mtime > max_age_s:
+                    shutil.rmtree(p, ignore_errors=True)
+            except OSError:
+                pass
+
+def _unique_name(staging, base):
+    p = staging / base
+    if not p.exists():
+        return base
+    stem, suf = Path(base).stem, Path(base).suffix
+    i = 2
+    while (staging / f"{stem}_{i}{suf}").exists():
+        i += 1
+    return f"{stem}_{i}{suf}"
+
+def _stage_uploads(staging, ups):
+    """Save uploaded files flat into the staging dir under unique basenames.
+    Returns the list of staged names."""
+    out = []
+    for up in ups:
+        if not up or not up.filename:
+            continue
+        name = _unique_name(staging, safe_upload_name(up.filename))
+        up.save(staging / name)
+        out.append(name)
+    return out
+
+def _pairs_opts(f):
+    """Pairs-panel options from form fields or a JSON dict (both have .get).
+    Returns (opts, error)."""
+    model = (f.get("model") or "").strip()
+    if not model or ".." in model or model.startswith("/"):
+        return None, "model is required"
+    order = f.get("order") or "number"
+    if order not in ("number", "name"):
+        return None, "invalid order"
+    onn = f.get("on_non_grid") or "round-up"
+    if onn not in ("round-up", "round-down", "refuse"):
+        return None, "invalid on_non_grid"
+    fpp = f.get("frames_per_pair")
+    try:
+        fpp = int(fpp) if fpp not in (None, "") else None
+    except (TypeError, ValueError):
+        return None, "invalid frames_per_pair"
+    opts = {"model": model, "host": (f.get("host") or "").strip() or None,
+            "order": order,
+            "config_json": (f.get("config_json") or "").strip() or None,
+            "frames_per_pair": fpp, "on_non_grid": onn}
+    return opts, None
+
+def _pairs_fallback_config(model):
+    """Per-model template if present, else the last completed job's config
+    staged to _tmp — same fallback as /api/add and /api/add-batch. Returns
+    (config_file_or_None, error_or_None)."""
+    if (HERE / "templates" / f"{model}.json").exists():
+        return None, None
+    with contextlib.closing(ltxq.db()) as con0:
+        row = con0.execute("SELECT config_text FROM jobs WHERE status='done' AND "
+                           "config_text IS NOT NULL ORDER BY created_at DESC").fetchone()
+    if not row:
+        return None, ("no config: add templates/" + model + ".json or run "
+                      "'Fill config from last job' on the main form once")
+    STAGE.mkdir(parents=True, exist_ok=True)
+    p = STAGE / f"cfg_{int(time.time()*1000)}.json"
+    p.write_text(row["config_text"])
+    return str(p), None
+
+def _pairs_payload(c, con, sid, manifest):
+    """Resolve the stored manifest against its stored opts. view is None when
+    resolution could not run at all (bad model/host/config) — errors say why."""
+    opts = manifest.get("opts") or {}
+    warnings = list(manifest.get("warnings", []))
+    errors = list(manifest.get("plan_errors", []))
+    if not opts.get("model"):
+        return {"sid": sid, "manifest": manifest, "view": None,
+                "errors": errors + ["no model chosen"], "warnings": warnings}
+    config_file, err = _pairs_fallback_config(opts["model"])
+    if err:
+        return {"sid": sid, "manifest": manifest, "view": None,
+                "errors": errors + [err], "warnings": warnings}
+    try:
+        res, rerrors, rwarns = ltxq.pairs_resolve(
+            c, con, manifest, model=opts["model"], host=opts.get("host"),
+            config_file=config_file, config_json=opts.get("config_json"),
+            frames_per_pair=opts.get("frames_per_pair"),
+            on_non_grid=opts.get("on_non_grid") or "round-up",
+            base_dir=_pairs_dir(sid))
+    except SystemExit as e:                       # bad host / bad config
+        return {"sid": sid, "manifest": manifest, "view": None,
+                "errors": errors + [str(e)], "warnings": warnings}
+    warnings += rwarns
+    errors += rerrors
+    view = None
+    if res:
+        view = {"model": res["model"], "fps": res["fps"], "grid": res["grid"],
+                "grid_floor": res["grid_floor"], "strategy": res["strategy"],
+                "pairs": [{k: v for k, v in p.items() if k != "cfg_delta"}
+                          if p else None for p in res["pairs"]]}
+    return {"sid": sid, "manifest": manifest, "view": view,
+            "errors": errors, "warnings": warnings}
+
+def _pairs_absorb(staging, manifest, srcdir, errors):
+    """Append a stills folder to a session: its consecutive pairs go to the
+    end of the sequence, its files are copied into the staging dir under
+    collision-safe names and every reference is remapped."""
+    opts = manifest.get("opts") or {}
+    sub, sub_errors = ltxq.pairs_plan_from_dir(
+        srcdir, order=opts.get("order", "number"),
+        prompt_text=manifest.get("shared_prompt"))
+    errors += sub_errors
+    if not sub["stills"]:
+        return errors
+    ren = {}
+    names = list(dict.fromkeys(                    # stills double as pair endpoints
+        list(sub["stills"]) +
+        [p[k] for p in sub["pairs"]
+         for k in ("first", "last", "config", "audio") if p.get(k)]))
+    for name in names:
+        dst_name = _unique_name(staging, name)
+        shutil.copyfile(srcdir / name, staging / dst_name)
+        ren[name] = dst_name
+    manifest["stills"] += [ren[s] for s in sub["stills"]]
+    for p in sub["pairs"]:
+        for k in ("first", "last", "config", "audio"):
+            if p.get(k):
+                p[k] = ren[p[k]]
+        manifest["pairs"].append(p)
+    manifest["warnings"] += sub["warnings"]
+    return errors
+
+def _pairs_stage_in(ups, typed_dir):
+    """Materialize a folder (uploaded files or a typed server-side path) into
+    a throwaway dir, the same shape the folder picker produces."""
+    tmp = STAGE / f"pairsin_{int(time.time()*1000)}_{uuid.uuid4().hex[:4]}"
+    tmp.mkdir(parents=True)
+    if ups:
+        for up in ups:
+            if up and up.filename:
+                up.save(tmp / safe_upload_name(up.filename))
+    else:
+        for p in sorted(typed_dir.iterdir()):
+            if p.is_file():
+                shutil.copyfile(p, tmp / safe_upload_name(p.name))
+    return tmp
+
+@app.post("/api/pairs/preview")
+def api_pairs_preview():
+    """Stage a stills folder and plan the pair sequence. The folder comes
+    either as uploaded files (webkitdirectory picker) or a server-side path."""
+    _pairs_gc()
+    f = flask.request.form
+    opts, err = _pairs_opts(f)
+    if err:
+        return flask.jsonify(error=err), 400
+    ups = flask.request.files.getlist("files")
+    src = (f.get("dir") or "").strip()
+    if not ups and not src:
+        return flask.jsonify(error="pick a folder or enter a stills "
+                                   "directory path"), 400
+    typed_dir = None
+    if not ups:
+        typed_dir = Path(src).expanduser()
+        if not typed_dir.is_dir():
+            return flask.jsonify(error=f"not a directory: {typed_dir}"), 400
+    sid = uuid.uuid4().hex[:8]
+    staging = _pairs_dir(sid)
+    staging.mkdir(parents=True)
+    try:
+        c, con = ltxq.conf(), ltxq.db()
+        try:
+            manifest = {"version": 1, "sid": sid, "stills": [], "pairs": [],
+                        "warnings": [], "plan_errors": [], "opts": opts,
+                        "batch": (f.get("batch") or "").strip()
+                                 or (typed_dir.name if typed_dir else "pairs"),
+                        "shared_prompt": (f.get("prompt") or "").strip() or None}
+            if ups:
+                tmp = _pairs_stage_in(ups, None)
+                errors = _pairs_absorb(staging, manifest, tmp, [])
+                shutil.rmtree(tmp, ignore_errors=True)
+            else:
+                errors = _pairs_absorb(staging, manifest, typed_dir, [])
+            manifest["plan_errors"] = errors
+            (staging / "manifest.json").write_text(json.dumps(manifest, indent=2))
+            payload = _pairs_payload(c, con, sid, manifest)
+        finally:
+            con.close()
+    except OSError as e:
+        shutil.rmtree(staging, ignore_errors=True)
+        return flask.jsonify(error=str(e)), 400
+    return flask.jsonify(**payload)
+
+@app.post("/api/pairs/<sid>/folder")
+def api_pairs_folder(sid):
+    """Append another folder's parsed pairs to the end of the sequence."""
+    if not _pairs_sid_ok(sid):
+        return flask.jsonify(error="no such pairs session"), 404
+    staging = _pairs_dir(sid)
+    ups = flask.request.files.getlist("files")
+    src = (flask.request.form.get("dir") or "").strip()
+    if not ups and not src:
+        return flask.jsonify(error="pick a folder or enter a stills "
+                                   "directory path"), 400
+    typed_dir = None
+    if not ups:
+        typed_dir = Path(src).expanduser()
+        if not typed_dir.is_dir():
+            return flask.jsonify(error=f"not a directory: {typed_dir}"), 400
+    c, con = ltxq.conf(), ltxq.db()
+    try:
+        manifest = json.loads((staging / "manifest.json").read_text())
+        errors = []
+        if ups:
+            tmp = _pairs_stage_in(ups, None)
+            errors = _pairs_absorb(staging, manifest, tmp, [])
+            shutil.rmtree(tmp, ignore_errors=True)
+        else:
+            errors = _pairs_absorb(staging, manifest, typed_dir, [])
+        manifest["plan_errors"] = errors
+        (staging / "manifest.json").write_text(json.dumps(manifest, indent=2))
+        payload = _pairs_payload(c, con, sid, manifest)
+    finally:
+        con.close()
+    return flask.jsonify(**payload)
+
+@app.post("/api/pairs/<sid>/images")
+def api_pairs_images(sid):
+    """Add single images to the stills palette (assignable to empty pair slots)."""
+    if not _pairs_sid_ok(sid):
+        return flask.jsonify(error="no such pairs session"), 404
+    staging = _pairs_dir(sid)
+    ups = flask.request.files.getlist("files")
+    if not ups:
+        return flask.jsonify(error="no images uploaded"), 400
+    manifest = json.loads((staging / "manifest.json").read_text())
+    manifest["stills"] += _stage_uploads(staging, ups)
+    (staging / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    c, con = ltxq.conf(), ltxq.db()
+    try:
+        payload = _pairs_payload(c, con, sid, manifest)
+    finally:
+        con.close()
+    return flask.jsonify(**payload)
+
+@app.get("/api/pairs/<sid>")
+def api_pairs_get(sid):
+    """Re-fetch a session (refresh recovery): stored manifest + fresh view."""
+    if not _pairs_sid_ok(sid):
+        return flask.jsonify(error="no such pairs session"), 404
+    staging = _pairs_dir(sid)
+    manifest = json.loads((staging / "manifest.json").read_text())
+    c, con = ltxq.conf(), ltxq.db()
+    try:
+        payload = _pairs_payload(c, con, sid, manifest)
+    finally:
+        con.close()
+    return flask.jsonify(**payload)
+
+@app.put("/api/pairs/<sid>/manifest")
+def api_pairs_put(sid):
+    """Autosave edits (reorder / delete / add pair / inline prompt text /
+    per-pair length) and re-derive the view; opts updates re-plan on model or
+    host change. Only the editable fields are taken from the client."""
+    if not _pairs_sid_ok(sid):
+        return flask.jsonify(error="no such pairs session"), 404
+    body = flask.request.get_json(silent=True) or {}
+    staging = _pairs_dir(sid)
+    manifest = json.loads((staging / "manifest.json").read_text())
+    if isinstance(body.get("pairs"), list):
+        pairs = []
+        for p in body["pairs"]:
+            if not isinstance(p, dict):
+                return flask.jsonify(error="each pair must be an object"), 400
+            fo = p.get("frames_override")
+            if fo is not None:
+                try:
+                    fo = int(fo)
+                except (TypeError, ValueError):
+                    return flask.jsonify(error="frames_override must be an "
+                                               "integer"), 400
+            pairs.append({
+                "first": Path(p.get("first") or "").name or None,
+                "last": Path(p.get("last") or "").name or None,
+                "prompt": str(p.get("prompt") or ""),
+                "prompt_src": str(p.get("prompt_src") or ""),
+                "config": Path(p["config"]).name if p.get("config") else None,
+                "audio": Path(p["audio"]).name if p.get("audio") else None,
+                "frames_override": fo})
+        manifest["pairs"] = pairs
+    if isinstance(body.get("stills"), list):
+        manifest["stills"] = [Path(s or "").name for s in body["stills"]
+                              if _pairs_staged(staging, Path(s or "").name)]
+    if isinstance(body.get("opts"), dict):
+        opts, err = _pairs_opts(body["opts"])
+        if err:
+            return flask.jsonify(error=err), 400
+        manifest["opts"] = opts
+    if "shared_prompt" in body:
+        manifest["shared_prompt"] = (body.get("shared_prompt") or "").strip() or None
+    (staging / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    c, con = ltxq.conf(), ltxq.db()
+    try:
+        payload = _pairs_payload(c, con, sid, manifest)
+    finally:
+        con.close()
+    return flask.jsonify(**payload)
+
+@app.post("/api/pairs/<sid>/queue")
+def api_pairs_queue(sid):
+    """Re-validate the stored manifest server-side, then queue one job per
+    pair. The staging dir is removed on success (assets live in the job dirs)."""
+    if not _pairs_sid_ok(sid):
+        return flask.jsonify(error="no such pairs session"), 404
+    staging = _pairs_dir(sid)
+    manifest = json.loads((staging / "manifest.json").read_text())
+    f = flask.request.form
+    ext = f.get("ext") or "mov"
+    if ext not in ("mov", "mp4", "png"):
+        return flask.jsonify(error="invalid ext"), 400
+    backend = f.get("backend") or None
+    if backend and backend not in ("oneshot", "serve"):
+        return flask.jsonify(error="invalid backend"), 400
+    try:
+        seed = int(f["seed"]) if f.get("seed") else None
+    except (TypeError, ValueError):
+        return flask.jsonify(error="invalid seed"), 400
+    c, con = ltxq.conf(), ltxq.db()
+    try:
+        opts = manifest.get("opts") or {}
+        config_file, err = _pairs_fallback_config(opts.get("model") or "")
+        if err:
+            return flask.jsonify(error=err), 400
+        try:
+            res, errors, warnings = ltxq.pairs_resolve(
+                c, con, manifest, model=opts.get("model"), host=opts.get("host"),
+                config_file=config_file, config_json=opts.get("config_json"),
+                frames_per_pair=opts.get("frames_per_pair"),
+                on_non_grid=opts.get("on_non_grid") or "round-up",
+                base_dir=staging)
+        except SystemExit as e:
+            return flask.jsonify(error=str(e)), 400
+        if errors:
+            return flask.jsonify(error="batch refused — nothing queued",
+                                 errors=errors), 400
+        out, cerr = _capture(lambda: ltxq.pairs_queue(
+            c, con, manifest, res, model=opts.get("model"),
+            host=opts.get("host"), ext=ext, backend=backend,
+            batch=(f.get("batch") or "").strip() or manifest.get("batch"),
+            seed=seed, base_dir=staging))
+        if cerr:
+            return flask.jsonify(error=cerr), 400
+        jids = re.findall(r"^([0-9a-f]{10})\s", out, re.M)
+        for jid in jids:
+            _publish_job(jid)
+    finally:
+        con.close()
+    shutil.rmtree(staging, ignore_errors=True)
+    return flask.jsonify(jids=jids, report=out)
+
+@app.get("/api/pairs/<sid>/file/<name>")
+def api_pairs_file(sid, name):
+    """Staged thumbnails (works for uploads, typed paths and refresh recovery)."""
+    if not _pairs_sid_ok(sid):
+        return "no such session", 404
+    p = _pairs_dir(sid) / Path(name).name
+    if not _pairs_staged(_pairs_dir(sid), name):
+        return "no such file", 404
+    return flask.send_file(p)
+
+@app.post("/api/pairs/<sid>/discard")
+def api_pairs_discard(sid):
+    """Drop a session and its staged files."""
+    if not _pairs_sid_ok(sid):
+        return flask.jsonify(error="no such pairs session"), 404
+    shutil.rmtree(_pairs_dir(sid), ignore_errors=True)
+    return flask.jsonify(discarded=sid)
 
 
 @app.get("/api/view/<jid>")

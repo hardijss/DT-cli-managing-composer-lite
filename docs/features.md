@@ -48,7 +48,7 @@
 - Dashboard: active/queued cards (bar, elapsed, phase, note, log tail),
   cancel
 - Add form: per-host model dropdown, prompt, config JSON overlay, seed /
-  new-seed, frames (`--frames` override), backend/host/ext, image &
+  new-seed (a negative seed means random), frames (`--frames` override), backend/host/ext, image &
   input-video uploads
 - LTX keyframes: first/middle/last-frame slots, repeated keyframes with
   `index[:strength[:attention]]`, default strengths
@@ -82,6 +82,15 @@
   segment 1, and a "Copy from New job" button (model, host, ext, seed,
   config overlay, prompt); validation failures list every offending segment
   and queue nothing
+- **Pairs batch panel**: parse a stills folder (drop/pick or a server-side
+  path) into an editable pair sequence — the pair list is the editable truth
+  (reorder ↑/↓, delete with a seam warning, append-and-move inserts, assign
+  stills from a palette to empty slots, inline per-pair prompts, per-pair
+  length snapped to the chosen model's grid); extra folders append their
+  parsed pairs, single images join the palette; changing model/host re-plans
+  the derived layer and keeps the edited sequence; the session autosaves and
+  survives a page refresh; queue re-validates server-side. Runs the same
+  planner as `add-pairs` (`/api/pairs/*`, API 1.7)
 
 ### CLI
 - `add/add-batch/ls/run/cancel/regen/check/probe/models/stage/reconcile/
@@ -106,6 +115,27 @@
   segment); same-named `<stem>.json` files are picked up as per-segment
   config overlays, validated upfront and cumulatively carried forward (sticky)
   until another `.json` sidecar appears
+- `add-pairs <dir>`: keyframe-pair batch composer (expansion-of-this-idea.md
+  Idea 2) — one independent job per consecutive still pair, `--first-frame
+  still-k` + `--last-frame still-k+1` (both endpoints pinned, so adjacent
+  renders join exactly at the shared still and the batch dispatches in
+  parallel). **Model-first:** the model/host choice fixes fps, the frame grid
+  (8n+1 LTX/WAN, 17n+5 H3) and the composition strategy (see
+  cli-dialects.md — `frame_slots` on dtcustom, `canvas_ref` — repeated
+  `--image`, end frame steered not pinned — on a pinned dtofficial host).
+  Still order: `--order number` (default; embedded numbers are relative order
+  only — gaps, non-padded and shuffled files fine; duplicate numbers and mixed
+  prefixes refuse) or `--order name` (alphabetical). Per-pair companions by
+  pair index: `prompt0001.txt`/`config0001.json`/`audio0001.wav` for pair 1
+  (integer matching, orphans warn); length precedence per pair: explicit
+  override > audio sidecar (ffprobe × fps, snapped, wav fitted) > config
+  sidecar `numFrames` > `--frames-per-pair` > template `numFrames`; frames go
+  into the config, never `--frames`. Empty prompts and one-sided pairs are
+  warnings, not blockers: a pair with only a last still composes as a lone
+  `--last-frame` (end pinned, start free — unvalidated against the engine),
+  only a first still rides as `--image` (a lone `--first-frame` is invalid),
+  a pair with no stills at all still refuses. The whole batch is validated
+  before anything is queued. Unnumbered stills refuse with a rename hint.
 - `doctor`: db self-checks (set_job single-row), ssh reachability, remote
   shell arithmetic, worker liveness, flask presence
 

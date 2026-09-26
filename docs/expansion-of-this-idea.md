@@ -167,7 +167,15 @@ Resolved while shipping:
 
 ## Idea 2 — Keyframe-pair batch from a folder of stills
 
-**Status: sketch**
+**Status: Done (v1)** — shipped as `ltxq add-pairs <dir>` plus the dashboard's
+Pairs batch panel (`/api/pairs/*`, API 1.7; 2026-09-25): two-phase
+parse → review/edit → queue, model-first flow (fps/grid/strategy from the
+model+host choice), per-dialect pair composition (`frame_slots` vs
+`canvas_ref`), per-pair length overrides with grid snapping, per-pair
+config/audio companions, ordering rules for unnumbered/gapped/mixed folders.
+Not implemented: reassembly (Idea 4), `--fit` still normalization (warn-only
+in v1), `--manifest` file input (the shipped manifest format already
+anticipates it), LLM prompt synthesis (prompt factory below).
 
 ### The scenario
 
@@ -291,14 +299,25 @@ form of backlog Idea 5.
 
 ### Open questions
 
-- Pairs or triplets as the default composition?
-- Pre-normalize still dimensions in the composer or leave it to Draw Things?
-- Naming/UX: separate `add-pairs`, or one `add-batch` with modes
-  (`--mode audio-manifest | keyframe-pairs | …`)?
-- LLM synthesis: its own `synth-prompts` step (two-phase default), or a flag
-  inside `add-pairs`? Where does the pairs manifest live — segment dir or
-  jobs/_tmp?
-- Context carry during synthesis: on or off by default?
+Resolved while shipping (v1):
+
+- **Pairs** as the default composition (stride-1); triplets via
+  `--middle-frame` stay a future mode. The review UI edits the pair list.
+- **Warn, don't normalize**: still-vs-template dimension mismatch warns; a
+  `--fit` ffmpeg pass stays future.
+- **Separate `add-pairs`** subcommand (not an `add-batch` mode) — the flag
+  surfaces barely overlap; the dashboard is a third composer panel.
+- **Reviewable by construction**: the two-phase flow shipped with v1 — the
+  parse produces the editable pairs manifest, queueing re-validates it
+  server-side. LLM synthesis (own step, pairs manifest as its output format,
+  context carry off by default) remains the follow-on; the manifest schema is
+  the interface it will write.
+- Companions are keyed by **pair index 1..N−1** (dense, stable when stills
+  are deleted), not by still number.
+- Model choice is the switch: fps, frame grid **and** the per-dialect CLI
+  strategy (`frame_slots` vs `canvas_ref`) all derive from model+host before
+  the gen list is built; per-pair lengths inherit the grid and can be
+  overridden (snapped, ties up).
 
 ---
 

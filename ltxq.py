@@ -1364,6 +1364,10 @@ def _cmd_add(c, con, a):
         extra += shlex.split(ea)
     seed = a.seed if a.seed is not None else \
         (random.randint(1, 2**31 - 1) if a.new_seed else None)
+    if seed is not None and seed < 0:
+        # engines reject a negative --seed; a negative seed REQUEST means random
+        print(f"seed {seed} is not a valid engine seed — using a random one")
+        seed = random.randint(1, 2**31 - 1)
     if seed is not None:
         extra += ["--seed", str(seed)]; print("seed:", seed)
     if a.frames is not None:
@@ -1598,7 +1602,11 @@ def _cmd_add_batch(c, con, a):
     else:
         default_batch = segdir.name
     batch = _norm_batch(a.batch or default_batch)
-    seed_extra = ["--seed", str(a.seed)] if a.seed is not None else []
+    seed = a.seed
+    if seed is not None and seed < 0:
+        print(f"seed {seed} is not a valid engine seed — random per segment")
+        seed = None
+    seed_extra = ["--seed", str(seed)] if seed is not None else []
     chain = "image" if a.chain else None
     if chain:
         print("chain: segments 2..N get the previous segment's last frame as "
@@ -1648,6 +1656,480 @@ def _cmd_add_batch(c, con, a):
                   + (f"  [{it['note']}]" if it["note"] else ""))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+# --- add-pairs: keyframe-pair batch composer (docs/expansion-of-this-idea.md Idea 2)
+
+PAIR_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+
+def _stem_number(stem):
+    """(prefix, number) when the stem ends in digits, else None."""
+    m = NATNUM.search(stem)
+    return (m.group(1), int(m.group(2))) if m else None
+
+def _as_frames(v):
+    """A positive-int frame count from JSON/config input, or None."""
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n >= 1 else None
+
+def _on_grid(n, grid):
+    step, base, min_n = grid
+    return (n - base) % step == 0 and n >= step * min_n + base
+
+def _snap_nearest(raw, grid):
+    """Snap to the nearest grid length; ties round up."""
+    up = _snap_frames(raw, up=True, grid=grid)
+    down = _snap_frames(raw, up=False, grid=grid)
+    return up if raw - down >= up - raw else down
+
+def _img_dims(path):
+    """(width, height) of a still via ffprobe, or None when unreadable."""
+    r = subprocess.run([ff_tool("ffprobe"), "-v", "error", "-select_streams", "v:0",
+                        "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x",
+                        str(path)], capture_output=True, text=True, timeout=60)
+    if r.returncode != 0 or "x" not in r.stdout:
+        return None
+    try:
+        w, h = r.stdout.strip().split("x")
+        return int(w), int(h)
+    except ValueError:
+        return None
+
+def pairs_strategy(c, con, host):
+    """Which CLI spelling a keyframe pair composes as, implied by the pinned
+    host's dialect: 'frame_slots' (--first-frame/--last-frame — both endpoints
+    pinned, adjacent renders join exactly at the shared still, dispatch runs
+    the fflf-preflight probe) or 'canvas_ref' (repeated --image: #1 is the
+    canvas/start frame, #2 a moodboard reference of the target — the end frame
+    is steered, not pinned, so seams are not exact). Unpinned jobs always
+    compose as frame_slots, so a multi-image pair can never land on the
+    dtcustom engine (upstream crash on more than one --image)."""
+    if not host:
+        return "frame_slots"
+    hr = con.execute("SELECT * FROM hosts WHERE alias=?", (host,)).fetchone()
+    if not hr:
+        sys.exit(f"no such host: {host}")
+    dialect = dialect_of(c, hr)
+    spec = dialect_spec(dialect)
+    if {"first_frame", "last_frame"} <= set(spec["flags"]):
+        return "frame_slots"
+    if "image" in spec["flags"]:
+        return "canvas_ref"
+    sys.exit(f"host {host} (dialect {dialect}) can express neither frame slots "
+             "nor repeated --image — cannot compose keyframe pairs")
+
+def _pair_assets(strategy, first, last, audio):
+    """The per-dialect spelling of one keyframe pair (see pairs_strategy).
+    A half-empty pair composes with the still it has: on frame_slots a missing
+    last rides as --image (start-pinned i2v — a lone --first-frame is
+    documented invalid), a missing first keeps a lone --last-frame; on
+    canvas_ref the remaining still becomes the canvas image."""
+    assets = []
+    if strategy == "canvas_ref":
+        if first:
+            assets.append(("--image", str(first)))
+        if last:
+            assets.append(("--image", str(last)))
+    elif first and last:
+        assets += [("--first-frame", str(first)), ("--last-frame", str(last))]
+    elif last:
+        assets.append(("--last-frame", str(last)))
+    elif first:
+        assets.append(("--image", str(first)))
+    if audio:
+        assets.append(("--audio", str(audio)))
+    return assets
+
+def _dir_stills(segdir, order):
+    """The ordered still spine of a folder. 'number' (default): images whose
+    stem ends in digits — the number is RELATIVE ORDER only (natural sort:
+    gaps, non-padded and shuffled files are fine; two files claiming one
+    number are ambiguous and refuse). 'name': every image, alphabetically.
+    Returns (stills, errors, warnings)."""
+    errors, warnings = [], []
+    images = sorted((p for p in segdir.iterdir()
+                     if p.is_file() and p.suffix.lower() in PAIR_IMAGE_EXTS
+                     and not p.name.startswith(".")), key=lambda p: p.name.lower())
+    if order == "name":
+        return images, errors, warnings
+    numbered, by_num = [], {}
+    for p in images:
+        sn = _stem_number(p.stem)
+        if not sn:
+            warnings.append(f"ignored unnumbered image: {p.name}")
+            continue
+        prefix, num = sn
+        if num in by_num:
+            errors.append(f"two stills claim number {num}: {by_num[num].name} and "
+                          f"{p.name} — the order is ambiguous, rename one")
+            continue
+        by_num[num] = p
+        numbered.append((prefix, num, p))
+    if not numbered:
+        hint = ('  i=1; for f in *.png; do mv "$f" "image$(printf \'%04d\' $i).png"; '
+                "i=$((i+1)); done")
+        errors.append(f"no numbered stills in {segdir.name} — name stills "
+                      "<prefix><number>.<ext> (any prefix, gaps fine) or pass "
+                      f"--order name; quick rename:\n{hint}")
+        return [], errors, warnings
+    prefixes = sorted({prefix for prefix, _, _ in numbered})
+    if len(prefixes) > 1:
+        errors.append(f"mixed still prefixes ({', '.join(prefixes)}) — the numeric "
+                      "order would be ambiguous; keep one prefix per folder")
+    numbered.sort(key=lambda t: (t[1], t[2].name))
+    return [p for _, _, p in numbered], errors, warnings
+
+def _dir_companions(segdir, npairs):
+    """Numbered companion sidecars keyed by pair index (1..npairs): the number
+    decides, the stem prefix is free (prompt0001.txt, cfg1.json, aud0001.wav).
+    Returns ({kind: {num: path}}, errors, warnings)."""
+    kinds = {".txt": "prompt", ".json": "config", ".wav": "audio"}
+    out = {"prompt": {}, "config": {}, "audio": {}}
+    errors, warnings = [], []
+    for p in sorted(segdir.iterdir(), key=lambda p: p.name.lower()):
+        if p.name.startswith(".") or not p.is_file():
+            continue
+        kind = kinds.get(p.suffix.lower())
+        if not kind:
+            continue
+        sn = _stem_number(p.stem)
+        if not sn:
+            warnings.append(f"ignored {p.suffix} file without a number: {p.name}")
+            continue
+        num = sn[1]
+        if num < 1 or num > npairs:
+            warnings.append(f"orphan {p.name}: no pair {num} (pairs are 1..{npairs})")
+            continue
+        if num in out[kind]:
+            errors.append(f"two {kind} sidecars claim pair {num}: "
+                          f"{out[kind][num].name} and {p.name}")
+            continue
+        out[kind][num] = p
+    return out, errors, warnings
+
+def pairs_plan_from_dir(segdir, order="number", prompt_text=None):
+    """The model-independent layer of a pairs batch: the still palette, the
+    consecutive pair list, per-pair companions and prompt texts. Returns
+    (manifest, errors) — parse warnings ride in manifest['warnings']. Nothing
+    here depends on model/fps/grid; lengths are derived later (pairs_resolve).
+    The manifest doubles as the future --manifest input for external feeds."""
+    stills, errors, warnings = _dir_stills(segdir, order)
+    manifest = {"version": 1, "order": order, "batch": segdir.name,
+                "stills": [p.name for p in stills], "pairs": [], "warnings": warnings}
+    if not stills:
+        return manifest, errors
+    if len(stills) < 2:
+        errors.append(f"need at least 2 stills for a pair batch (got {len(stills)})")
+        return manifest, errors
+    comp, cerr, cwarn = _dir_companions(segdir, len(stills) - 1)
+    errors += cerr
+    manifest["warnings"] += cwarn
+    for k in range(1, len(stills)):
+        pc = comp["prompt"].get(k)
+        if pc is not None:
+            prompt, src = pc.read_text(), pc.name
+        elif prompt_text is not None:
+            prompt, src = prompt_text, "shared"
+        else:
+            # no prompt yet: pairs_resolve refuses empty prompts at queue time,
+            # so a dashboard session can be saved unfinished and fixed inline
+            prompt, src = "", ""
+        manifest["pairs"].append({
+            "first": stills[k - 1].name, "last": stills[k].name,
+            "prompt": prompt, "prompt_src": src,
+            "config": comp["config"][k].name if k in comp["config"] else None,
+            "audio": comp["audio"][k].name if k in comp["audio"] else None,
+            "frames_override": None})
+    return manifest, errors
+
+def pairs_resolve(c, con, manifest, *, model, host=None, config_file=None,
+                  config_json=None, frames_per_pair=None, on_non_grid="round-up",
+                  base_dir=None):
+    """The model-dependent layer: fps, frame grid, composition strategy, and
+    each pair's frame count / wav fit / config overlay. Returns
+    (res, errors, warnings); res['pairs'] aligns with manifest['pairs'] by
+    index (None where the pair is broken — already reported in errors).
+    Frame-length precedence: explicit frames_override (snapped to the grid) >
+    audio sidecar (duration-derived, snapped, wav fitted) > that pair's config
+    numFrames > --frames-per-pair > template numFrames. Soft gaps warn instead
+    of blocking: an empty prompt, and a pair with one still missing (composed
+    with the side it has — see _pair_assets). Blocking: a referenced still
+    gone from disk, a pair with no stills at all, broken companions, or no
+    frame-length source."""
+    errors, warnings = [], []
+    cfg_text, obj = _load_cfg(c, con, model, config_file, config_json)
+    grid = frame_grid(model)
+    step, base, min_n = grid
+    tfps = obj.get("fps")
+    fps = float(tfps) if tfps else None
+    strategy = pairs_strategy(c, con, host)
+    base_dir = Path(base_dir) if base_dir else Path(".")
+    res = {"model": model, "fps": fps, "grid": f"{step}n+{base}",
+           "grid_floor": step * min_n + base, "strategy": strategy,
+           "cfg_obj": obj, "pairs": []}
+    for k, pair in enumerate(manifest["pairs"], 1):
+        notes = []
+        if not str(pair.get("prompt") or "").strip():
+            warnings.append(f"pair {k}: has no prompt — queueing anyway"
+                            if not pair.get("prompt_src")
+                            else f"pair {k}: empty prompt ({pair['prompt_src']})")
+        first = base_dir / pair["first"] if pair.get("first") else None
+        last = base_dir / pair["last"] if pair.get("last") else None
+        gone = [tag for tag, p in (("first", first), ("last", last))
+                if p and not p.exists()]
+        if gone:
+            errors.append(f"pair {k}: {' and '.join(gone)} still not found: "
+                          f"{', '.join(pair[tag] for tag in gone)}")
+            res["pairs"].append(None)
+            continue
+        if first is None and last is None:
+            errors.append(f"pair {k}: has no stills — assign at least one "
+                          "(a pair with neither side cannot render)")
+            res["pairs"].append(None)
+            continue
+        if first is None or last is None:
+            if strategy == "canvas_ref":
+                warnings.append(f"pair {k}: one still missing — the remaining "
+                                "still becomes the canvas image (start-pinned i2v)")
+            elif first is None:
+                warnings.append(f"pair {k}: no first still — composed as a lone "
+                                "--last-frame (end pinned, start free; unvalidated "
+                                "against the engine)")
+            else:
+                warnings.append(f"pair {k}: no last still — composed as --image "
+                                "(start-pinned i2v; a lone --first-frame is invalid)")
+        cfg_delta = None
+        if pair["config"]:
+            cp = base_dir / pair["config"]
+            if not cp.exists():
+                errors.append(f"pair {k}: config sidecar not found: {pair['config']}")
+            else:
+                try:
+                    parsed = json.loads(cp.read_text())
+                    if not isinstance(parsed, dict):
+                        errors.append(f"pair {k}: {pair['config']}: JSON root must "
+                                      "be an object {...}")
+                    else:
+                        cfg_delta = parsed
+                        for dim in ("width", "height"):
+                            if cfg_delta.get(dim) and cfg_delta[dim] % 64:
+                                warnings.append(f"pair {k}: {pair['config']}: "
+                                                f"{dim}={cfg_delta[dim]} is not a multiple of 64")
+                        if fps and cfg_delta.get("fps") and float(cfg_delta["fps"]) != fps:
+                            errors.append(f"pair {k}: {pair['config']}: fps "
+                                          f"{cfg_delta['fps']} != template fps {tfps:g}")
+                except json.JSONDecodeError as e:
+                    errors.append(f"pair {k}: {pair['config']}: invalid JSON ({e})")
+        audio_frames, fit = None, None
+        if pair["audio"]:
+            ap = base_dir / pair["audio"]
+            if not ap.exists():
+                errors.append(f"pair {k}: audio not found: {pair['audio']}")
+            elif not fps:
+                errors.append(f"pair {k}: {pair['audio']} needs a template fps to "
+                              "derive its frame count")
+            else:
+                try:
+                    dur = _wav_duration(ap)
+                except (RuntimeError, ValueError) as e:
+                    errors.append(f"pair {k}: {e}")
+                else:
+                    raw = round(dur * fps)
+                    if raw < res["grid_floor"]:
+                        errors.append(f"pair {k}: {pair['audio']}: {dur:.2f}s is under "
+                                      f"the {res['grid_floor']}-frame minimum ({res['grid']}) "
+                                      f"at {fps:g} fps")
+                    elif raw % step != base:
+                        if on_non_grid == "refuse":
+                            errors.append(f"pair {k}: {pair['audio']}: {raw} frames is "
+                                          f"non-{res['grid']} (--on-non-grid refuse)")
+                        else:
+                            audio_frames = _snap_frames(raw, up=(on_non_grid == "round-up"),
+                                                        grid=grid)
+                            fit = "pad" if audio_frames > raw else "trim"
+                            notes.append(f"{pair['audio']}: {raw} → {audio_frames} frames "
+                                         f"({abs(raw - audio_frames) / fps:.2f}s "
+                                         f"{'padded' if fit == 'pad' else 'trimmed'})")
+                    else:
+                        audio_frames = raw
+        if audio_frames is not None and cfg_delta is not None and \
+                cfg_delta.get("numFrames") is not None and not pair["frames_override"]:
+            cn = _as_frames(cfg_delta["numFrames"])
+            if cn is not None and cn != audio_frames:
+                errors.append(f"pair {k}: {pair['config']}: numFrames {cn} conflicts "
+                              f"with audio-derived {audio_frames} — drop one of them")
+        if pair["frames_override"]:
+            frames = _snap_nearest(pair["frames_override"], grid)
+            if frames != pair["frames_override"]:
+                notes.append(f"length snapped to the {res['grid']} grid "
+                             f"({pair['frames_override']} → {frames})")
+            if audio_frames is not None and audio_frames != frames:
+                notes.append(f"overriding audio-derived length ({audio_frames} → "
+                             f"{frames}); the wav is "
+                             f"{'trimmed' if frames < audio_frames else 'silence-padded'}")
+                fit = "trim" if frames < audio_frames else "pad"
+        elif audio_frames is not None:
+            frames = audio_frames
+        elif cfg_delta is not None and cfg_delta.get("numFrames") is not None:
+            frames = _as_frames(cfg_delta["numFrames"])
+            if frames is None:
+                errors.append(f"pair {k}: {pair['config']}: invalid numFrames "
+                              f"{cfg_delta['numFrames']!r}")
+                res["pairs"].append(None)
+                continue
+            if not _on_grid(frames, grid):
+                warnings.append(f"pair {k}: numFrames {frames} from {pair['config']} "
+                                f"is off the {res['grid']} grid")
+        elif frames_per_pair:
+            frames = frames_per_pair
+            if not _on_grid(frames, grid):
+                warnings.append(f"pair {k}: --frames-per-pair {frames} is off the "
+                                f"{res['grid']} grid")
+        elif obj.get("numFrames") is not None:
+            frames = _as_frames(obj["numFrames"])
+            if frames is None:
+                errors.append(f"pair {k}: template numFrames {obj['numFrames']!r} "
+                              "is not a positive integer")
+                res["pairs"].append(None)
+                continue
+            if not _on_grid(frames, grid):
+                warnings.append(f"pair {k}: template numFrames {frames} is off the "
+                                f"{res['grid']} grid")
+        else:
+            errors.append(f"pair {k}: no frame length source (audio sidecar, config "
+                          "numFrames, --frames-per-pair, or template numFrames)")
+            res["pairs"].append(None)
+            continue
+        for tag, p in (("first", first), ("last", last)):
+            dims = _img_dims(p)
+            if dims and obj.get("width") and obj.get("height") and \
+                    tuple(dims) != (obj["width"], obj["height"]):
+                warnings.append(f"pair {k}: {pair[tag]} is {dims[0]}x{dims[1]}, "
+                                f"template is {obj['width']}x{obj['height']} — "
+                                "the engine will resize")
+        res["pairs"].append({"first": pair.get("first") or None,
+                             "last": pair.get("last") or None,
+                             "prompt": pair["prompt"], "prompt_src": pair["prompt_src"],
+                             "config": pair["config"], "audio": pair["audio"],
+                             "frames": frames, "fit": fit, "notes": notes,
+                             "cfg_delta": cfg_delta})
+    for k in range(2, len(manifest["pairs"]) + 1):
+        prev, cur = manifest["pairs"][k - 2], manifest["pairs"][k - 1]
+        if prev.get("last") and cur.get("first") and prev["last"] != cur["first"]:
+            warnings.append(f"seam: pair {k - 1} ends at {prev['last']} but pair {k} "
+                            f"starts at {cur['first']} — no shared still (a visible "
+                            "cut, not a join)")
+    used = {p[tag] for p in manifest["pairs"] for tag in ("first", "last") if p.get(tag)}
+    unused = [n for n in manifest.get("stills", []) if n not in used]
+    if unused:
+        shown = ", ".join(unused[:5]) + (f" … +{len(unused) - 5} more"
+                                         if len(unused) > 5 else "")
+        warnings.append(f"{len(unused)} unused still(s): {shown}")
+    return res, errors, warnings
+
+def pairs_queue(c, con, manifest, res, *, model, host=None, ext="mov",
+                backend=None, batch=None, seed=None, base_dir=None):
+    """The shared queueing tail: one independent job per resolved pair (no
+    chain — every pair already carries both keyframes, so the batch dispatches
+    in parallel). The caller has validated: no errors in res/errors."""
+    base_dir = Path(base_dir) if base_dir else Path(".")
+    batch = _norm_batch(batch or manifest.get("batch"))
+    if seed is not None and seed < 0:
+        print(f"seed {seed} is not a valid engine seed — random per pair")
+        seed = None
+    seed_extra = ["--seed", str(seed)] if seed is not None else []
+    strategy = res["strategy"]
+    if strategy == "canvas_ref":
+        print("pairs compose as canvas_ref (--image canvas + moodboard reference): "
+              "the end frame is steered, not pinned — adjacent renders will not "
+              "join exactly at the shared still")
+    tmp = HERE / "jobs" / "_tmp" / ("pairsfit_" + uuid.uuid4().hex[:8])
+    tmp.mkdir(parents=True, exist_ok=True)
+    jids = []
+    try:
+        for k, (pair, v) in enumerate(zip(manifest["pairs"], res["pairs"]), 1):
+            if v is None:
+                continue                     # resolve already reported this pair
+            audio_src = None
+            if pair["audio"]:
+                ap = base_dir / pair["audio"]
+                if v["fit"]:
+                    try:
+                        audio_src = _fit_wav(ap, v["frames"], res["fps"],
+                                             tmp / Path(pair["audio"]).name, v["fit"])
+                    except RuntimeError as e:
+                        print(f"ERROR: pair {k}: {e} — pair skipped", file=sys.stderr)
+                        continue
+                else:
+                    audio_src = ap
+            job_cfg = dict(res["cfg_obj"])
+            if v["cfg_delta"]:
+                job_cfg.update(v["cfg_delta"])
+            job_cfg["numFrames"] = v["frames"]
+            assets = _pair_assets(strategy,
+                                  base_dir / pair["first"] if pair.get("first") else None,
+                                  base_dir / pair["last"] if pair.get("last") else None,
+                                  audio_src)
+            jid = create_job(c, con, model, pair["prompt"],
+                             json.dumps(job_cfg, indent=2), assets, list(seed_extra),
+                             host=host, name=f"pair-{k:04d}", ext=ext,
+                             backend=backend, batch=batch,
+                             num_frames=v["frames"], fps=res["fps"])
+            jids.append(jid)
+            tag = "".join(f"  [{n}]" for n in v["notes"])
+            print(f"{jid}  pair-{k:04d}  {pair.get('first') or '—'} → "
+                  f"{pair.get('last') or '—'}  {v['frames']} frames{tag}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return jids
+
+def cmd_add_pairs(a):
+    c, con = conf(), db(); sync_hosts(con)
+    try:
+        return _cmd_add_pairs(c, con, a)
+    finally:
+        con.close()
+
+def _cmd_add_pairs(c, con, a):
+    """Keyframe-pair mode: one job per consecutive still pair in a directory.
+    Model-first: the model/host choice fixes fps, the frame grid and the
+    composition strategy (frame_slots vs canvas_ref); the gen list is planned
+    against it. Prompts from numbered .txt sidecars falling back to
+    --prompt-file. Validates the whole batch before queueing anything."""
+    if ".." in a.model or a.model.startswith("/"):
+        sys.exit("invalid --model: must be a model id, not a path with '..' or '/'")
+    segdir = Path(a.dir).expanduser()
+    if not segdir.is_dir():
+        sys.exit(f"not a directory: {segdir}")
+    prompt_text = Path(a.prompt_file).read_text() if a.prompt_file else None
+    manifest, errors = pairs_plan_from_dir(segdir, order=a.order,
+                                           prompt_text=prompt_text)
+    res, r_errors, r_warnings = None, [], []
+    if manifest["pairs"]:
+        res, r_errors, r_warnings = pairs_resolve(
+            c, con, manifest, model=a.model, host=a.host, config_file=a.config_file,
+            config_json=a.config_json, frames_per_pair=a.frames_per_pair,
+            on_non_grid=a.on_non_grid, base_dir=segdir)
+    errors += r_errors
+    head = f"pairs: {len(manifest['pairs'])} job(s) from {len(manifest['stills'])} stills"
+    if res:
+        head += f" — {res['grid']} grid"
+        if res["fps"]:
+            head += f", {res['fps']:g} fps"
+    print(head)
+    if res:
+        print(f"composition: {res['strategy']} ({a.host or 'unpinned — any dtcustom host'})")
+    for w in manifest["warnings"] + r_warnings:
+        print(f"warn: {w}", file=sys.stderr)
+    if errors:
+        for e in errors:
+            print("ERROR:", e, file=sys.stderr)
+        sys.exit(f"batch refused: {len(errors)} problem(s) across "
+                 f"{len(manifest['pairs'])} pairs — nothing queued")
+    pairs_queue(c, con, manifest, res, model=a.model, host=a.host, ext=a.ext,
+                backend=a.backend, batch=a.batch, seed=a.seed, base_dir=segdir)
 
 def cmd_regen(a):
     con = db(); sync_hosts(con)
@@ -2142,6 +2624,33 @@ def main():
                         "(the chain anchor); overrides a same-named sidecar image. "
                         "Same-named <stem>.png/jpg/jpeg/webp files next to the wavs "
                         "are always picked up as per-segment --image")
+    g = sp.add_parser("add-pairs", help="queue one job per consecutive still pair "
+                                        "in a directory (keyframe interpolation: "
+                                        "first frame → last frame)")
+    g.add_argument("dir")
+    g.add_argument("--model", required=True)
+    g.add_argument("--prompt-file",
+                   help="shared fallback prompt for pairs without a numbered .txt sidecar")
+    g.add_argument("--config-file"); g.add_argument("--config-json")
+    g.add_argument("--host", help="pin a host; its dialect picks the composition "
+                                  "strategy (dtcustom: --first-frame/--last-frame; "
+                                  "dtofficial: repeated --image)")
+    g.add_argument("--seed", type=int)
+    g.add_argument("--ext", default="mov", choices=["mov", "mp4", "png"])
+    g.add_argument("--backend", choices=["oneshot", "serve"])
+    g.add_argument("--batch", help="group label (default: the directory name)")
+    g.add_argument("--order", choices=["number", "name"], default="number",
+                   help="still order: embedded number (default — gaps, non-padded "
+                        "and shuffled files are fine) or plain alphabetical name")
+    g.add_argument("--frames-per-pair", type=int,
+                   help="uniform frame count for pairs without their own length "
+                        "source (an audio sidecar or config numFrames wins; the "
+                        "template's numFrames loses)")
+    g.add_argument("--on-non-grid", choices=["round-up", "round-down", "refuse"],
+                   default="round-up",
+                   help="an audio sidecar off the model's frame grid: round up and "
+                        "silence-pad the wav (default), round down and trim it, or "
+                        "refuse the batch")
     g = sp.add_parser("regen"); g.add_argument("id")
     g.add_argument("--model"); g.add_argument("--config-json"); g.add_argument("--host")
     g.add_argument("--name"); g.add_argument("--seed", type=int)
@@ -2173,7 +2682,8 @@ def main():
     g = sp.add_parser("serve-stop"); g.add_argument("alias")
     g.add_argument("--force", action="store_true")
     args = p.parse_args()
-    {"add": cmd_add, "add-batch": cmd_add_batch, "ls": cmd_ls, "run": cmd_run,
+    {"add": cmd_add, "add-batch": cmd_add_batch, "add-pairs": cmd_add_pairs,
+     "ls": cmd_ls, "run": cmd_run,
      "cancel": cmd_cancel,
      "regen": cmd_regen, "probe": cmd_probe, "reconcile": cmd_reconcile,
      "models": cmd_models, "check": cmd_check, "stage": cmd_stage,

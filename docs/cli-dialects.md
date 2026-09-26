@@ -66,6 +66,40 @@ render on a `dtofficial` host should attach the image to *Image* (plus extra
 images), not to a frame slot. The frame/keyframe form fields show a hint when
 an explicitly selected host's dialect lacks frame roles.
 
+### Pair composition strategies (`add-pairs`)
+
+A keyframe pair (still k → still k+1) composes differently per dialect — the
+pinned host's dialect **is** the switch:
+
+| dialect | strategy | pair k's assets | semantics |
+|---|---|---|---|
+| `dtcustom` | `frame_slots` | `--first-frame still-k` + `--last-frame still-k+1` | both endpoints pinned; adjacent renders join exactly at the shared still; dispatch runs the `--fflf-preflight` probe |
+| `dtofficial` | `canvas_ref` | `--image still-k` + `--image still-k+1` | image #1 is the canvas (start frame pinned), #2 a moodboard reference of the target: the end frame is **steered, not pinned** — adjacent renders do *not* join exactly at the shared still |
+
+Rules that fall out of this:
+
+- Unpinned jobs always compose as `frame_slots`, so a multi-image pair can
+  never land on the `dtcustom` engine (its CLI crashes on more than one
+  `--image` — see the multi-`--image` WIP note in the changelog).
+- Composing `canvas_ref` pairs requires pinning the `dtofficial` host; the
+  dashboard badge and the queue output say so explicitly.
+- Frames go into the job config's `numFrames` on both dialects, never the
+  `--frames` override — which also keeps `dtofficial`'s strict `--frames`
+  validation out of the picture.
+
+Half-empty pairs compose with the still they have (warned, never silent):
+
+| pair | `frame_slots` (dtcustom) | `canvas_ref` (dtofficial) |
+|---|---|---|
+| first + last | `--first-frame A --last-frame B` | `--image A --image B` |
+| only last B | lone `--last-frame B` — end pinned, start free; unvalidated against the engine | `--image B` — canvas start-pinned i2v |
+| only first A | `--image A` — start-pinned i2v (a lone `--first-frame` is documented invalid) | `--image A` |
+| neither | refuses: nothing to condition on | refuses |
+
+A one-sided pair therefore carries no `fflf_preflight` probe (that needs both
+slots) and a first-only pair carries only the `image` capability, so it may
+route to any host including `dtofficial`.
+
 ## Frame-count validation (strict vs rounding)
 
 The two dialects treat a `--frames` count that is off the selected model's grid

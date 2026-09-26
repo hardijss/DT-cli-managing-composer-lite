@@ -26,7 +26,8 @@ NEXT = STATIC / "index-next.html"
 
 # ids that belong to /next's composer shell (tabs + panels) — the only allowed
 # structural difference between the two files.
-NEXT_ONLY_IDS = {"panel-single", "panel-audio", "tab-single", "tab-audio"}
+NEXT_ONLY_IDS = {"panel-single", "panel-audio", "tab-single", "tab-audio",
+                 "panel-pairs", "tab-pairs"}
 
 # A string that marks a feature both dashboards must expose.
 FEATURE_MARKERS = (
@@ -37,6 +38,9 @@ FEATURE_MARKERS = (
     "ICONS",                                        # monoline icon set
     "keyframes",                                    # keyframe rows
     '$("bhost").onchange',                          # per-form model list reload
+    "pairsform",                                    # keyframe-pairs batch panel
+    "/api/pairs/",                                  # ...and its staging API
+    '$("phost").onchange',                          # per-form model list reload
 )
 
 ID_RE = re.compile(r'id="([^"]+)"')
