@@ -364,6 +364,12 @@ class LLMEnhanceTests(LLMBase):
             r = self.enhance({"text": "a cat", "endpoint": "test-llm",
                               "model": "m", "directive": "enhance-ltx"})
             self.assertEqual(r.get_json()["directive"], "enhance-ltx")
+            # a user-created preset is explicitly selectable by name
+            self.client.put("/api/llm/template",
+                            json={"template": "MY PRESET", "name": "my-preset"})
+            r = self.enhance({"text": "a cat", "endpoint": "test-llm",
+                              "model": "m", "directive": "my-preset"})
+            self.assertEqual(r.get_json()["directive"], "my-preset")
         finally:
             ltxq.llm_chat = orig
 

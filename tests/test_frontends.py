@@ -46,6 +46,7 @@ FEATURE_MARKERS = (
     "psdir",                                        # pair-directive picker
     "plldir",                                       # ...its directive dropdown
     "plldirNew",                                    # ...library new/delete
+    "pllenh",                                       # explicit enhance-directive
     "/api/llm/",                                    # ...and its endpoint API
     "/api/llm/directives",                          # directive library in both
     "/api/llm/enhance",                             # prompt enhancement in both

@@ -127,7 +127,22 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
 - **`static/index.html` / `index-next.html`**: [new] (save-as: creates a
   directive from the current editor text under a prompted name) and
   [delete] buttons in the directive editor row; delete is disabled for
-  shipped variants (custom flag) and confirmed before the call.
+  shipped variants (custom flag) and confirmed before the call. The global
+  LLM card gains an explicit **Enhance directive** select (`pllenh`) —
+  "auto (model-matched)" default plus every library entry, remembered in
+  localStorage and sent by all three ✨ buttons (empty = server-side
+  auto-selection), so user-created presets are selectable for enhancement.
+
+### Docs: LLM selection & directives writeup
+
+- **`docs/llm-directives.md`** (new): one page detailing the global LLM
+  card (endpoint/model/enhance-directive, storage and fallbacks), the
+  directive library (shipped vs user-local, name-override semantics,
+  new/delete), the exact selection-resolution order (explicit wins, then
+  model-matched defaults by kind, user-local wins by name), what each call
+  sends (pair synthesis = both stills + facts; enhancement = text only),
+  and a checklist for onboarding a new generation model. Linked from the
+  LLM feature bullets in features.md.
 
 ## [Unreleased] - 2026-09-25
 

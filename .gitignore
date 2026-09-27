@@ -10,6 +10,7 @@ jobs/
 # Local / sensitive config
 hosts.yaml
 llm.yaml
+llm_directives/
 .ssh_mux/
 
 # Python

@@ -126,11 +126,13 @@ a { color:var(--acc); text-decoration:none; }
 
   <div class="card" id="llmcard">
     <div class="row">
-      <div><label>LLM — pair synthesis &amp; prompt enhancement (<span class="mono">llm.yaml</span>)</label>
+      <div><label>LLM — synthesis &amp; enhancement (<span class="mono">llm.yaml</span>)</label>
         <div class="row">
           <select id="pllendp" style="width:auto" title="LLM server endpoint"></select>
           <select id="pllmm" style="width:auto" title="vision / instruct model"><option value="">—</option></select>
         </div></div>
+      <div><label>Enhance directive (✨)</label>
+        <select id="pllenh" style="width:auto" title="which directive the ✨ buttons steer with — 'auto' follows the target model (H3 gets the T2VA rewrite)"><option value="">auto (model-matched)</option></select></div>
       <div class="grow"><details id="pllmtemp">
         <summary class="sub">edit directives</summary>
         <div class="row">
@@ -1661,6 +1663,9 @@ async function pllLoadDirectives() {
     let name = pllDirPicked ? $("psdir").value : r.default;
     if (!sdirs.some(d => d.name === name)) name = sdirs[0] ? sdirs[0].name : "";
     $("psdir").value = name;
+    $("pllenh").innerHTML = `<option value="">auto (model-matched)</option>` + opts(pllDirs);
+    const savedEnh = localStorage.getItem("ltxq.llm_enh_dir") || "";
+    $("pllenh").value = pllDirs.some(d => d.name === savedEnh) ? savedEnh : "";
     pllLoadTemplate();
   } catch (e) { /* directive service down — selects stay empty */ }
 }
@@ -1683,6 +1688,8 @@ $("plldir").onchange = () => {                    // editor target, remembered
   pllLoadTemplate();
 };
 $("psdir").onchange = () => { pllDirPicked = true; };
+$("pllenh").onchange = () =>
+  localStorage.setItem("ltxq.llm_enh_dir", $("pllenh").value);
 $("pmodel").addEventListener("change", () => {   // re-match the pair directive
   pllDirPicked = false; pllLoadDirectives();
 });
@@ -1694,7 +1701,8 @@ async function llmEnhanceCall(text, genModel) {
   return api("/api/llm/enhance", {method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({text, gen_model: genModel,
-                          endpoint: $("pllendp").value, model: $("pllmm").value})});
+                          endpoint: $("pllendp").value, model: $("pllmm").value,
+                          directive: $("pllenh").value})});
 }
 $("penh").onclick = async () => {
   const el = $("prompt"), orig = el.value.trim();
