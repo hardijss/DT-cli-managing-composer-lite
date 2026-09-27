@@ -292,6 +292,43 @@ class LLMDirectiveTests(LLMBase):
         self.assertEqual(r.status_code, 400)
 
 
+class LLMDirectiveDeleteTests(LLMBase):
+    def test_delete_own_creation(self):
+        r = self.client.put("/api/llm/template",
+                            json={"template": "MINE", "name": "my-variant"})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue((TMP / "llm_directives" / "my-variant.txt").exists())
+        r = self.client.delete("/api/llm/directives/my-variant")
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse((TMP / "llm_directives" / "my-variant.txt").exists())
+        self.assertNotIn("my-variant", [d["name"] for d in ltxq.llm_directives()])
+
+    def test_delete_override_restores_shipped(self):
+        r = self.client.put("/api/llm/template",
+                            json={"template": "OVERRIDE", "name": "ltx-default"})
+        self.assertEqual(r.status_code, 200)
+        r = self.client.delete("/api/llm/directives/ltx-default")
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse((TMP / "llm_directives" / "ltx-default.txt").exists())
+        txt, meta, err = ltxq.llm_directive("ltx-default")
+        self.assertIsNone(err)
+        self.assertEqual(txt, "TEST DEFAULT DIRECTIVE — describe the transition.")
+        self.assertFalse(meta["custom"])
+
+    def test_delete_shipped_refused(self):
+        r = self.client.delete("/api/llm/directives/ltx-default")
+        self.assertEqual(r.status_code, 403)
+        self.assertIn("shipped", r.get_json()["error"])
+        self.assertTrue((ltxq.HERE / "templates" / "llm_directives"
+                         / "ltx-default.txt").exists())
+
+    def test_delete_unknown_and_invalid(self):
+        r = self.client.delete("/api/llm/directives/never-existed")
+        self.assertEqual(r.status_code, 404)
+        r = self.client.delete("/api/llm/directives/..%2Fevil")
+        self.assertIn(r.status_code, (400, 404))   # rejected before path use
+
+
 class LLMEnhanceTests(LLMBase):
     def enhance(self, body):
         return self.client.post("/api/llm/enhance", json=body)

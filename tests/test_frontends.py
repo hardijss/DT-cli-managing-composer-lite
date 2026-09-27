@@ -42,7 +42,10 @@ FEATURE_MARKERS = (
     "/api/pairs/",                                  # ...and its staging API
     '$("phost").onchange',                          # per-form model list reload
     "pairsSynth",                                   # LLM pair-vision synthesis
+    "llmcard",                                      # global LLM selection card
+    "psdir",                                        # pair-directive picker
     "plldir",                                       # ...its directive dropdown
+    "plldirNew",                                    # ...library new/delete
     "/api/llm/",                                    # ...and its endpoint API
     "/api/llm/directives",                          # directive library in both
     "/api/llm/enhance",                             # prompt enhancement in both

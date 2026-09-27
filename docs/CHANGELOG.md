@@ -103,6 +103,32 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
   deliberately terser than LTX-2's elaborate-prompt advice, with a v2
   recipe).
 
+### Refactor: LLM selection promoted to a global card
+
+- **`static/index.html` / `index-next.html`**: the LLM endpoint + model
+  selects move out of the pairs panel into a slim global card at the very
+  top of the dashboard (`.llmcard` below the hosts line) — they are globals
+  shared by pair synthesis, pair enhancement and main-form enhancement
+  (which previously had no visible selection of its own). The directive
+  **editor** moves into the same card (its select lists the whole library,
+  choice remembered); the pairs panel keeps a contextual **Pair directive**
+  picker (`psdir`, synthesis-kind variants only — `enhance-*` filtered out)
+  that stays auto-matched to the pairs model. No API changes; parity
+  markers `llmcard`/`psdir` added.
+
+### Feature: directive library [new] / [delete]
+
+- **`server.py`**: `DELETE /api/llm/directives/<name>` — removes a
+  user-local directive from `llm_directives/` next to hosts.yaml. Deleting
+  an override of a shipped variant restores the shipped text; shipped
+  variants in `templates/` are refused (403) — they are repo files and can
+  only be changed by editing the repo. Unknown name → 404, invalid name →
+  400.
+- **`static/index.html` / `index-next.html`**: [new] (save-as: creates a
+  directive from the current editor text under a prompted name) and
+  [delete] buttons in the directive editor row; delete is disabled for
+  shipped variants (custom flag) and confirmed before the call.
+
 ## [Unreleased] - 2026-09-25
 
 ### Feature: keyframe-pair batch composer (`add-pairs` + Pairs batch panel)

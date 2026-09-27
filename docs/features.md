@@ -91,6 +91,13 @@
   the derived layer and keeps the edited sequence; the session autosaves and
   survives a page refresh; queue re-validates server-side. Runs the same
   planner as `add-pairs` (`/api/pairs/*`, API 1.7)
+- **Global LLM selection card** (top of the dashboard): endpoint + model
+  selects from `llm.yaml` shared by pair synthesis, pair enhancement and
+  main-form enhancement; the directive editor (whole library, save creates
+  local overrides/new variants) lives in the same card, with [new]
+  (save-as) and [delete] buttons — user-local directives only, shipped
+  variants are not deletable from the UI. The pairs panel keeps a
+  contextual pair-directive picker, auto-matched to the pairs model
 - **LLM pair-vision synthesis** (pairs panel): a local vision LLM describes
   each pair's first→last transition and fills the per-pair prompts
   (`prompt_src: "llm"`) for review before queueing — "Describe all pairs"

@@ -1238,6 +1238,27 @@ def api_llm_template_put():
     return flask.jsonify(ok=True, name=name, template=txt, custom=True,
                          path=str(ddir / f"{name}.txt"))
 
+@app.delete("/api/llm/directives/<name>")
+def api_llm_directive_delete(name):
+    """Delete a user-local directive (an own creation, or the local override
+    of a shipped variant — deleting an override just restores the shipped
+    text). Shipped variants in templates/ are repo files: never deletable
+    from the UI."""
+    if not LLM_DIRECTIVE_NAME_RE.match(name or ""):
+        return flask.jsonify(error="invalid directive name"), 400
+    p = ltxq.CONF_PATH.parent / ltxq.LLM_DIRECTIVES_DIR / f"{name}.txt"
+    if not p.exists():
+        if any(d["name"] == name and not d["custom"]
+               for d in ltxq.llm_directives()):
+            return flask.jsonify(error=f"'{name}' is shipped (templates/) "
+                                       "and cannot be deleted from the UI"), 403
+        return flask.jsonify(error=f"no directive named '{name}'"), 404
+    try:
+        p.unlink()
+    except OSError as e:
+        return flask.jsonify(error=f"cannot delete {p}: {e}"), 500
+    return flask.jsonify(ok=True, name=name)
+
 @app.post("/api/llm/enhance")
 def api_llm_enhance():
     """Text-only prompt improvement (the enhance buttons): one synchronous
