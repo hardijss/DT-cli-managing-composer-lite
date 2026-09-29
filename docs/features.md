@@ -124,8 +124,10 @@
   a T2VA-format distillation) or picked explicitly from the global card's
   Enhance-directive select (any library entry, incl. user-created presets);
   enhanced pair prompts become user-owned (`prompt_src: "inline"`). Uses
-  the pairs panel's LLM endpoint/model. Selection rules, call payloads and
-  the new-model checklist: `docs/llm-directives.md`
+  the pairs panel's LLM endpoint/model; an "attach stills" toggle in the
+  global card sends the pair's two stills along on per-pair ✨ for
+  image-aware directives (vision model required). Selection rules, call
+  payloads and the new-model checklist: `docs/llm-directives.md`
 
 ### CLI
 - `add/add-batch/ls/run/cancel/regen/check/probe/models/stage/reconcile/

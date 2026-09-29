@@ -47,6 +47,7 @@ FEATURE_MARKERS = (
     "plldir",                                       # ...its directive dropdown
     "plldirNew",                                    # ...library new/delete
     "pllenh",                                       # explicit enhance-directive
+    "pllenhimg",                                    # ...its attach-stills toggle
     "/api/llm/",                                    # ...and its endpoint API
     "/api/llm/directives",                          # directive library in both
     "/api/llm/enhance",                             # prompt enhancement in both

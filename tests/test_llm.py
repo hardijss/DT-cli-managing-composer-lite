@@ -401,6 +401,61 @@ class LLMEnhanceTests(LLMBase):
         self.assertEqual(r.status_code, 502)
 
 
+    def test_enhance_with_pair_stills_attached(self):
+        payload = self.preview(stills_dir("llm_enhimg"))
+        sid = payload["sid"]
+        seen = {}
+
+        def fake_chat(base_url, model, messages, timeout=120, temperature=0.3):
+            seen["messages"] = messages
+            return "sharper with frames"
+
+        orig = ltxq.llm_chat
+        ltxq.llm_chat = fake_chat
+        try:
+            r = self.enhance({"text": "a cat", "endpoint": "test-llm",
+                              "model": "m",
+                              "pair": {"sid": sid, "index": 0}})
+            self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+            self.assertEqual(r.get_json()["images"], 2)
+            parts = seen["messages"][1]["content"]
+            self.assertIn("a cat", parts[0]["text"])
+            labels = [p.get("text") for p in parts if p.get("type") == "text"]
+            self.assertIn("First frame:", labels)
+            self.assertIn("Last frame:", labels)
+            self.assertEqual(sum(1 for p in parts if p.get("type") == "image_url"), 2)
+            # text-only default unchanged
+            r = self.enhance({"text": "a cat", "endpoint": "test-llm",
+                              "model": "m"})
+            self.assertEqual(r.get_json()["images"], 0)
+        finally:
+            ltxq.llm_chat = orig
+
+    def test_enhance_pair_attach_error_paths(self):
+        payload = self.preview(stills_dir("llm_enhimg_err"))
+        sid = payload["sid"]
+        r = self.enhance({"text": "x", "endpoint": "test-llm", "model": "m",
+                          "pair": {"sid": "0" * 8, "index": 0}})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("no such pairs session", r.get_json()["error"])
+        r = self.enhance({"text": "x", "endpoint": "test-llm", "model": "m",
+                          "pair": {"sid": sid, "index": 99}})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("out of range", r.get_json()["error"])
+        # a pair with no stills assigned must refuse, not silently downgrade
+        r = self.client.put(f"/api/pairs/{sid}/manifest", json={"pairs": [
+            {"first": "", "last": "", "prompt": "", "prompt_src": "",
+             "config": None, "audio": None, "frames_override": None}]})
+        self.assertEqual(r.status_code, 200)
+        r = self.enhance({"text": "x", "endpoint": "test-llm", "model": "m",
+                          "pair": {"sid": sid, "index": 0}})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("no stills assigned", r.get_json()["error"])
+        r = self.enhance({"text": "x", "endpoint": "test-llm", "model": "m",
+                          "pair": {"sid": sid, "index": "bad"}})
+        self.assertEqual(r.status_code, 400)
+
+
 class PairsSynthTests(LLMBase):
     def synth(self, sid, body):
         return self.client.post(f"/api/pairs/{sid}/synth", json=body)

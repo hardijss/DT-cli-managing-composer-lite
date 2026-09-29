@@ -80,8 +80,13 @@ MiniMax's three-fields format.
 | call | images? | payload |
 |---|---|---|
 | 🪄 pair synthesis | **yes — both pair stills** | directive (system) + both staged stills (ffmpeg-downscaled to ≤1024 px jpg when larger, base64 data URLs, order-labeled) + shared prompt as scene/style intent + clip facts (frames/fps/seconds) |
-| ✨ enhance (any surface, incl. utility presets) | **no — text only** | directive (system) + the field's draft text (8000-char cap) |
+| ✨ enhance (any surface) | **text only by default; per-pair rows attach the pair's two stills when the global card's "attach stills" toggle is on** | directive (system) + the field's draft text (8000-char cap) + optional labeled first/last frame parts; a requested-but-broken attach is an error, never a silent downgrade — and the selected model must be vision-capable |
 | model dropdown | — | `GET /v1/models` proxy |
+
+The "attach stills" toggle (`localStorage ltxq.llm_enh_img`) only affects ✨
+on per-pair prompts — the pair's staged stills are what get attached; the
+shared prompt and the main form have no single pair to attach and stay
+text-only.
 
 `{{DUR}}` / `{{FRAMES}}` / `{{FPS}}` tokens in a directive's **output** are
 substituted server-side from the resolved view (duration = grid-resolved

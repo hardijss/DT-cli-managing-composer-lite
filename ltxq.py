@@ -1901,6 +1901,22 @@ def pairs_pair_messages(pair, staging, shared_prompt, template, tmp_dir=None,
     return llm_pair_messages(first, last, shared_prompt, template,
                              Path(tmp_dir) if tmp_dir else staging, facts)
 
+def llm_enhance_messages(text, directive, image_paths=None, tmp_dir=None):
+    """Messages for an enhancement call: the directive as system role, the
+    draft text as user role — plus, when image_paths are given (a pair's two
+    staged stills), labeled image parts so the directive can reason about
+    the actual frames. Text-only when no paths."""
+    if not image_paths:
+        return [{"role": "system", "content": directive},
+                {"role": "user",
+                 "content": "Draft prompt to improve:\n" + text}]
+    parts = [{"type": "text", "text": "Draft prompt to improve:\n" + text}]
+    for label, p in zip(("First frame", "Last frame"), image_paths):
+        parts.append({"type": "text", "text": label + ":"})
+        parts.append(_llm_image_part(p, tmp_dir or Path(p).parent))
+    return [{"role": "system", "content": directive},
+            {"role": "user", "content": parts}]
+
 def pairs_describe_pair(pair, staging, shared_prompt, base_url, model,
                         template, timeout=120, tmp_dir=None, facts=None,
                         subs=None):

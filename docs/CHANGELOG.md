@@ -144,6 +144,24 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
   and a checklist for onboarding a new generation model. Linked from the
   LLM feature bullets in features.md.
 
+### Feature: image-aware enhancement (attach pair stills to ✨)
+
+- **`ltxq.py`**: `llm_enhance_messages()` — the enhancement message builder;
+  with image paths it adds labeled first/last frame parts (same
+  ffmpeg-downscaled data-URL path as synthesis), without them stays a plain
+  text call.
+- **`server.py`**: `POST /api/llm/enhance` accepts optional
+  `pair: {sid, index}` — attaches that pair's two staged stills for
+  image-aware directives. Strict validation: unknown session / bad index /
+  unassigned or missing stills → 400, never a silent text-only downgrade.
+  Response reports `images` sent.
+- **`static/index.html` / `index-next.html`**: "attach stills" checkbox
+  next to the Enhance-directive select in the global card (remembered in
+  localStorage). It affects ✨ on per-pair prompts only — those send
+  `pair: {sid, index}`; shared-prompt and main-form ✨ have no single pair
+  and remain text-only. Requires a vision-capable model (a text-only model
+  errors clearly).
+
 ## [Unreleased] - 2026-09-25
 
 ### Feature: keyframe-pair batch composer (`add-pairs` + Pairs batch panel)

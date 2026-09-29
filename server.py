@@ -1289,8 +1289,33 @@ def api_llm_enhance():
         txt, meta, terr = ltxq.llm_directive(name)
     if terr:
         return flask.jsonify(error=terr), 400
-    messages = [{"role": "system", "content": txt},
-                {"role": "user", "content": "Draft prompt to improve:\n" + text}]
+    # Optional image attach: body `pair: {sid, index}` sends that pair's two
+    # staged stills along (for directives that reason about the frames).
+    # Strict — a requested-but-broken attach is a 400, never a silent
+    # text-only downgrade.
+    attach = d.get("pair") or {}
+    image_paths = None
+    if isinstance(attach, dict) and (attach.get("sid") or "").strip():
+        asid = str(attach["sid"]).strip()
+        if not _pairs_sid_ok(asid):
+            return flask.jsonify(error="no such pairs session"), 400
+        try:
+            ai = int(attach.get("index"))
+        except (TypeError, ValueError):
+            return flask.jsonify(error="invalid pair index"), 400
+        amanifest = json.loads((_pairs_dir(asid) / "manifest.json").read_text())
+        apairs = amanifest.get("pairs") or []
+        if not (0 <= ai < len(apairs)):
+            return flask.jsonify(error="pair index out of range"), 400
+        apair = apairs[ai]
+        if not (apair.get("first") and apair.get("last")):
+            return flask.jsonify(error="that pair has no stills assigned"), 400
+        astaging = _pairs_dir(asid)
+        first, last = astaging / apair["first"], astaging / apair["last"]
+        if not (first.is_file() and last.is_file()):
+            return flask.jsonify(error="pair stills missing from the session"), 400
+        image_paths = [first, last]
+    messages = ltxq.llm_enhance_messages(text, txt, image_paths)
     try:
         out = ltxq.llm_chat(ep["base_url"], model, messages,
                             timeout=timeout).strip()
@@ -1298,7 +1323,8 @@ def api_llm_enhance():
         return flask.jsonify(error=str(e)), 502
     if not out:
         return flask.jsonify(error="LLM returned an empty prompt"), 502
-    return flask.jsonify(text=out, directive=name)
+    return flask.jsonify(text=out, directive=name,
+                         images=len(image_paths) if image_paths else 0)
 
 
 def _pairs_llm_setup(d, gen_model=None):

@@ -132,7 +132,10 @@ a { color:var(--acc); text-decoration:none; }
           <select id="pllmm" style="width:auto" title="vision / instruct model"><option value="">—</option></select>
         </div></div>
       <div><label>Enhance directive (✨)</label>
-        <select id="pllenh" style="width:auto" title="which directive the ✨ buttons steer with — 'auto' follows the target model (H3 gets the T2VA rewrite)"><option value="">auto (model-matched)</option></select></div>
+        <div class="row">
+          <select id="pllenh" style="width:auto" title="which directive the ✨ buttons steer with — 'auto' follows the target model (H3 gets the T2VA rewrite)"><option value="">auto (model-matched)</option></select>
+          <label style="margin:0" title="when enhancing a per-pair prompt, send that pair's two stills too — needs a vision-capable model"><input type="checkbox" id="pllenhimg"> attach stills</label>
+        </div></div>
       <div class="grow"><details id="pllmtemp">
         <summary class="sub">edit directives</summary>
         <div class="row">
@@ -1697,12 +1700,12 @@ $("pmodel").addEventListener("change", () => {   // re-match the pair directive
 // ---- LLM prompt enhancement (phase B): ✨ rewrites a draft prompt via the
 // text-only /api/llm/enhance call; ↺ restores the previous text. Uses the
 // same endpoint/model selection as pair synthesis.
-async function llmEnhanceCall(text, genModel) {
+async function llmEnhanceCall(text, genModel, pair = null) {
   return api("/api/llm/enhance", {method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({text, gen_model: genModel,
                           endpoint: $("pllendp").value, model: $("pllmm").value,
-                          directive: $("pllenh").value})});
+                          directive: $("pllenh").value, pair})});
 }
 $("penh").onclick = async () => {
   const el = $("prompt"), orig = el.value.trim();
@@ -1743,8 +1746,9 @@ $("ppenhundo").onclick = () => {
 async function pairsEnhanceOne(i) {
   const p = pairsData.manifest.pairs[i], orig = (p.prompt || "").trim();
   if (!orig) return flash("nothing to enhance — write a draft first", true);
+  const pair = $("pllenhimg").checked && pairsSid ? {sid: pairsSid, index: i} : null;
   try {
-    const r = await llmEnhanceCall(orig, $("pmodel").value);
+    const r = await llmEnhanceCall(orig, $("pmodel").value, pair);
     enhUndo[i] = {prompt: p.prompt, prompt_src: p.prompt_src};
     p.prompt = r.text; p.prompt_src = "inline";
     await pairsSave({pairs: pairsData.manifest.pairs});
@@ -1845,6 +1849,9 @@ $("pllmtempSave").onclick = async () => {
     flash(`directive "${$("plldir").value}" saved`);
   } catch (e) { flash(e.message, true); }
 };
+$("pllenhimg").checked = localStorage.getItem("ltxq.llm_enh_img") === "1";
+$("pllenhimg").onchange = () =>
+  localStorage.setItem("ltxq.llm_enh_img", $("pllenhimg").checked ? "1" : "");
 pllLoadEndpoints();
 pllLoadDirectives();
 
