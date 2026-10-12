@@ -2,6 +2,27 @@
 
 All notable changes, bug fixes, and feature additions to `ltxq` are documented here.
 
+## [Unreleased] - 2026-10-12
+
+### Fix: history time column shows actual generation time
+
+- **`static/index.html`, `static/index-next.html`**: the history table's time
+  column (header `elapsed` → `gen`) now renders the actual generation time
+  reported by the CLI (`total_gen_s`, already in the API payload but previously
+  unrendered), with the submission-to-completion figure in the cell tooltip.
+  Jobs without a reported generation time keep the old since-submission value,
+  dimmed, with an explanatory tooltip. Previously every history row showed
+  `finished_at − (started_at or created_at)`, which for queued batches includes
+  waiting for earlier members — a job queued behind six siblings displayed
+  ~1h30m for a ~12m render.
+- **`tests/test_frontends.py`**: `total_gen_s` added to FEATURE_MARKERS so both
+  dashboards stay in lockstep.
+- Verified: full unittest suite green (135 tests); both dashboard scripts pass
+  `node --check`; render check against the live window (network-stubbed node
+  run) shows the new cells on `/` and `/next` — e.g. `12m35s` titled "actual
+  generation 12m35s · 12m50s since submission", plus the dimmed no-gen
+  fallback ("generation time not reported").
+
 ## [Unreleased] - 2026-09-29
 
 ### Feature: History run grouping — batch strips, boundary lines, subtle tint

@@ -53,6 +53,7 @@ FEATURE_MARKERS = (
     "/api/llm/enhance",                             # prompt enhancement in both
     "run-first",                                    # history run grouping: boundary
     'data-run="',                                   # ...and its hover/tint group key
+    "total_gen_s",                                  # history time column: actual generation time
 )
 
 ID_RE = re.compile(r'id="([^"]+)"')

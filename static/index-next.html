@@ -421,7 +421,7 @@ a { color:var(--acc); text-decoration:none; }
   <h2>History</h2>
   <div class="card" style="padding:6px 10px">
   <table><thead><tr><th>id</th><th>name</th><th>status</th><th>backend</th>
-    <th>pct</th><th>elapsed</th><th>note</th><th></th></tr></thead>
+    <th>pct</th><th title="actual generation time — hover a value for submission-to-completion">gen</th><th>note</th><th></th></tr></thead>
     <tbody id="hist"></tbody></table>
   </div>
 
@@ -696,7 +696,9 @@ function render(d) {
       <td>${j.chain ? `<span class="badge" title="continuation: last frame of the previous generation attached as ${esc(j.chain)}">${ICONS.chain}</span> ` : ""}${j.batch ? `<span class="badge" title="batch group">${ICONS.box}</span> ` : ""}${esc(j.name)}${inputs}</td>
       <td><span class="badge ${esc(j.status)}">${esc(j.status)}</span></td>
       <td>${esc(j.backend||"-")}</td>
-      <td>${j.pct}%</td><td>${fmt(j.elapsed)}</td>
+      <td>${j.pct}%</td>${j.total_gen_s
+        ? `<td title="actual generation ${fmt(j.total_gen_s)} · ${fmt(j.elapsed)} since submission">${fmt(j.total_gen_s)}</td>`
+        : `<td title="generation time not reported · ${fmt(j.elapsed)} since submission"><span class="sub">${fmt(j.elapsed)}</span></td>`}
       <td class="note">${esc((j.note||"") + (j.local_out ? " · " + j.local_out : ""))}</td>
       <td><a href="/api/view/${esc(j.id)}" target="_blank">View</a>
           <button class="sec" data-load="${esc(j.id)}">Load</button>
