@@ -51,6 +51,8 @@ FEATURE_MARKERS = (
     "/api/llm/",                                    # ...and its endpoint API
     "/api/llm/directives",                          # directive library in both
     "/api/llm/enhance",                             # prompt enhancement in both
+    "run-first",                                    # history run grouping: boundary
+    'data-run="',                                   # ...and its hover/tint group key
 )
 
 ID_RE = re.compile(r'id="([^"]+)"')

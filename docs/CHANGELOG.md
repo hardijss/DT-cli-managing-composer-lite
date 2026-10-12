@@ -2,6 +2,29 @@
 
 All notable changes, bug fixes, and feature additions to `ltxq` are documented here.
 
+## [Unreleased] - 2026-09-29
+
+### Feature: History run grouping — batch strips, boundary lines, subtle tint
+
+- **`static/index.html`, `static/index-next.html`**: history rows now group into
+  contiguous batch runs at render time — a slim strip row per batched run
+  (`label · N jobs · time span`), a 1px boundary line at each run start
+  (`tr.run-first`), and a subtle alternating neutral tint (`tr.run-alt`) on
+  every other run. Unbatched rows stay plain; single-job runs keep a strip
+  (single timestamp); a delegated hover cross-highlights the whole run (strip
+  included). New `--tint` / `--tint-hl` / `--edge2` tokens; render-only — no
+  API or schema change.
+- **`server.py`, `ltxq.py`**: the history-window ordering (`state_dict()` and
+  CLI `ls`) now tiebreaks same-second submissions with `rowid DESC` — a batch
+  queued in one loop previously had undefined sibling order (observed
+  oldest-first rendering). Takes effect on the next `ui`/`run` restart.
+- **`tests/test_frontends.py`**: `run-first` and `data-run="` added to
+  FEATURE_MARKERS so both dashboards stay in lockstep.
+- Verified: full unittest suite green (135 tests); dashboard render checked
+  against the live window with a network-stubbed harness — 15 runs → 15
+  strips, boundary + alternating tint rows present, identical on `/` and
+  `/next`.
+
 ## [Unreleased] - 2026-09-26
 
 ### Feature: LLM pair-vision synthesis (the helper stage, phase A)

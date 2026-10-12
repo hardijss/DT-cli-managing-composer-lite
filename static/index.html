@@ -6,7 +6,8 @@
 <title>ltxq — render queue</title>
 <style>
 :root { --bg:#111418; --card:#1b2027; --edge:#2a313b; --fg:#e6e9ee; --dim:#9aa4b2;
-        --acc:#4f9cf9; --ok:#3fb96f; --warn:#e2a63d; --bad:#e05a5a; }
+        --acc:#4f9cf9; --ok:#3fb96f; --warn:#e2a63d; --bad:#e05a5a;
+        --tint:#222c37; --tint-hl:#2b3540; --edge2:#414b58; }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--fg);
        font:14px/1.45 -apple-system, "Segoe UI", sans-serif; }
@@ -49,6 +50,16 @@ label { font-size:12px; color:var(--dim); display:block; margin:10px 0 4px; }
 table { width:100%; border-collapse:collapse; font-size:12.5px; }
 th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--edge); }
 th { color:var(--dim); font-weight:500; }
+/* history run grouping: strip row + boundary line + subtle alternating tint
+   per batch run; hover lights the whole run (incl. its strip) */
+tr.run-first td { border-top:1px solid var(--edge2); }
+tr.run-alt td { background:var(--tint); }
+tr.strip td { background:#171c23; color:var(--dim); font-size:10.5px;
+              letter-spacing:.08em; text-transform:uppercase; padding:4px 8px; }
+tr.strip svg { margin-right:5px; vertical-align:-2px; }
+tr.strip .sep { margin:0 6px; opacity:.55; }
+tr.hl td { background:var(--tint-hl); }
+tr.strip.hl td { background:#1f262f; }
 form .grid { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
 #flash { position:fixed; right:16px; top:16px; z-index:5; display:none;
          max-width:420px; }
@@ -458,6 +469,7 @@ async function api(path, opts) {
 const ACTIVE = ["queued","uploading","running","suspect","cancelling","collecting"];
 const ATTACH_MEDIA = false;   // "+ media" history-row button — hidden, pending revisit
 const openDetails = new Set();
+let histHover = null;    // history: batch run currently hover-highlighted
 
 function render(d) {
   document.querySelectorAll("details[data-details-key]").forEach(el => {
@@ -615,9 +627,30 @@ function render(d) {
       catch (e) { flash(e.message, true); }
     });
 
-  $("hist").innerHTML = d.jobs
-    .filter(j => !ACTIVE.includes(j.status))
-    .map(j => {
+  // history rows are grouped into contiguous batch runs (same batch label):
+  // one strip row per run + boundary line + subtle alternating tint;
+  // unbatched rows stay plain, hover lights the whole run
+  const histJobs = d.jobs.filter(j => !ACTIVE.includes(j.status));
+  const histRuns = [];
+  for (const j of histJobs) {
+    const b = j.batch || null;
+    if (!histRuns.length || histRuns[histRuns.length - 1].batch !== b)
+      histRuns.push({ batch: b, rows: [] });
+    histRuns[histRuns.length - 1].rows.push(j);
+  }
+  const hhmm = t => { const d = new Date((t || 0) * 1000);
+    return String(d.getHours()).padStart(2, "0") + ":" +
+           String(d.getMinutes()).padStart(2, "0"); };
+  let histHtml = "", histRun = -1;
+  for (const run of histRuns) {
+    const batched = !!run.batch;
+    if (batched) histRun++;
+    if (batched) {
+      const t0 = hhmm(run.rows[run.rows.length - 1].created_at);
+      const t1 = hhmm(run.rows[0].created_at);
+      histHtml += `<tr class="strip" data-run="${histRun}"><td colspan="8">${ICONS.box} ${esc(run.batch)}<span class="sep">·</span>${run.rows.length} job${run.rows.length > 1 ? "s" : ""}<span class="sep">·</span>${t0 === t1 ? t0 : t0 + " – " + t1}</td></tr>`;
+    }
+    histHtml += run.rows.map((j, k) => {
       const assets = (() => { try { return JSON.parse(j.assets || "[]"); }
                               catch (e) { return []; } })();
       const inputs = assets.length
@@ -636,7 +669,10 @@ function render(d) {
           }).join("") +
           `</details>`
         : "";
-      return `<tr>
+      const cls = [batched && k === 0 ? "run-first" : "",
+                   batched && histRun % 2 === 0 ? "run-alt" : ""]
+                  .filter(Boolean).join(" ");
+      return `<tr${cls ? ` class="${cls}"` : ""}${batched ? ` data-run="${histRun}"` : ""}>
       <td class="mono">${esc(j.id)}</td>
       <td>${j.chain ? `<span class="badge" title="continuation: last frame of the previous generation attached as ${esc(j.chain)}">${ICONS.chain}</span> ` : ""}${j.batch ? `<span class="badge" title="batch group">${ICONS.box}</span> ` : ""}${esc(j.name)}${inputs}</td>
       <td><span class="badge ${esc(j.status)}">${esc(j.status)}</span></td>
@@ -649,6 +685,28 @@ function render(d) {
           ${ATTACH_MEDIA ? `<button class="sec" data-attach="${esc(j.id)}" title="attach this job's input files (image / first / middle / last frame, audio, keyframes) on top of the current form — a slot already staged is replaced, the rest is kept">+ media</button>` : ""}
           <button class="danger" data-del="${esc(j.id)}" title="delete from history">${ICONS.x}</button></td>
     </tr>`; }).join("");
+  }
+  $("hist").innerHTML = histHtml;
+  if (histHover !== null)
+    document.querySelectorAll(`#hist tr[data-run="${histHover}"]`)
+      .forEach(r => r.classList.add("hl"));
+  $("hist").onmouseover = ev => {
+    const tr = ev.target.closest('tr[data-run]');
+    if (!tr || histHover === +tr.dataset.run) return;
+    histHover = +tr.dataset.run;
+    document.querySelectorAll(`#hist tr[data-run="${histHover}"]`)
+      .forEach(r => r.classList.add("hl"));
+  };
+  $("hist").onmouseout = ev => {
+    const tr = ev.target.closest('tr[data-run]');
+    if (!tr) return;
+    const to = ev.relatedTarget && ev.relatedTarget.closest
+      ? ev.relatedTarget.closest("tr[data-run]") : null;
+    if (to && to.dataset.run === tr.dataset.run) return;
+    histHover = null;
+    document.querySelectorAll(`#hist tr[data-run="${tr.dataset.run}"]`)
+      .forEach(r => r.classList.remove("hl"));
+  };
   document.querySelectorAll("[data-load]").forEach(b =>
     b.onclick = async () => {
       try {

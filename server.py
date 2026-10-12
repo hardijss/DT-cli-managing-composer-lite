@@ -387,7 +387,7 @@ def _hosts_view(con):
 def state_dict():
     with contextlib.closing(ltxq.db()) as con:
         jobs = [jrow(j) for j in con.execute(
-            "SELECT * FROM jobs ORDER BY created_at DESC LIMIT 50")]
+            "SELECT * FROM jobs ORDER BY created_at DESC, rowid DESC LIMIT 50")]
         return {"jobs": jobs, "hosts": _hosts_view(con),
                 "merge": merge_view(con), "merge_run": dict(MERGE_RUN),
                 "engine": STATE["engine"], "now": int(time.time())}

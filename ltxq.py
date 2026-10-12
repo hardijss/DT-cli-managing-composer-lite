@@ -2540,7 +2540,7 @@ def cmd_run(a):
 
 def cmd_ls(a):
     con = db(); sync_hosts(con); now = int(time.time())
-    for j in con.execute("SELECT * FROM jobs ORDER BY created_at DESC LIMIT 50"):
+    for j in con.execute("SELECT * FROM jobs ORDER BY created_at DESC, rowid DESC LIMIT 50"):
         el = (j["finished_at"] or now) - (j["started_at"] or j["created_at"])
         print(f"{j['id']}  {j['status']:<10} {(j['backend'] or '-'):<7} "
               f"{j['host'] or '-':<8} {j['pct']:>3}%  {el // 60:>4}m  "
