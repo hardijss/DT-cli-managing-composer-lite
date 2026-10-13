@@ -13,6 +13,8 @@ Topic docs:
   `ltxq flags` per-dialect drift check (with committed snapshots
   [generate_flags.dtcustom.txt](generate_flags.dtcustom.txt))
 - [environment.md](environment.md) — hosts.yaml keys, env vars, CLI flags
+- [cli-dialects.md](cli-dialects.md) — engine-CLI dialects (`cli_dialect`): what
+  each binary understands, capability gating, drift checks
 - [features.md](features.md) — full feature list, known issues, TODOs
 - [decisions.md](decisions.md) — design decisions and rationale
 - [expansion-of-this-idea.md](expansion-of-this-idea.md) — expansion-ideas scratchpad (unimplemented ideas)
