@@ -530,6 +530,159 @@ improve the personal workflow.
 
 ---
 
+## Idea 8 — Audio batch E1: multi-image attachment & dialect-aware compilation
+
+**Status: spec draft — planning review (2026-10-13); nothing built yet.** A
+cloned successor of the basic audio-batch panel (Idea 1's UI), adding
+multi-image attachment with per-image role targets and dialect-aware
+compilation. The basic panel and `add-batch` / `/api/add-batch` stay
+untouched; E1 lands in the `/next` dashboard first as a new "Audio E1" tab.
+
+### The scenario
+
+An audio-segment batch needs more than the current one-image-per-segment rule:
+
+- a segment pinned start→end (a first frame **and** a last frame);
+- a segment that continues the previous generation (⛓ last frame) *and* adds
+  an extra reference or an end frame;
+- refs/moodboards referenced from the prompt (dtofficial / H3 path) instead
+  of pinned frames (dtcustom path).
+
+The two dialects express these differently — argument-carried roles
+(`--first-frame` …) vs prompt-carried roles (`--image` order + `<Picture N>`,
+see docs/reference/minimax-full-reference-guide.md) — so the composer keeps a
+**dialect-neutral attachment model** and compiles per host dialect.
+
+### Input contract (A — sidecar suffixes)
+
+Files next to each `<stem>.wav` extend the existing same-stem image rule:
+
+```
+<stem>.png        ordered image #1   (legacy alias of .i — keeps today's behavior)
+<stem>.i.png      ordered image #1   → --image            (either dialect)
+<stem>.i2.png     ordered image #2   → --image, then .i3 … (order by number)
+<stem>.f.png      first frame        → --first-frame      (dtcustom)
+<stem>.m.png      middle frame       → --middle-frame     (dtcustom)
+<stem>.l.png      last frame         → --last-frame       (dtcustom)
+<stem>.k12.png    keyframe @ index 12 → --keyframe path:12:… (dtcustom)
+<stem>.txt        prompt sidecar     (unchanged)
+<stem>.json       config overlay     (unchanged)
+```
+
+Rules: role letters are **lowercase only** (macOS filesystems are
+case-insensitive — case cannot be the signal); `.f`/`.m`/`.l` are single per
+stem; `.kNN` repeats per index; multiple ordered images are numbered in the
+stem (`.i`, `.i2`, `.i3`, … — no upper bound in the grammar; the dialect
+compile decides usability). Unknown suffixes go to a visible "not attached"
+tray — never silently ignored.
+
+### Attachments model
+
+Each segment carries an ordered list of attachments — `{file, target}` with
+target ∈ `ordered | first | middle | last | keyframe(idx)` — plus a
+**continuity ghost attachment** (⛓ previous segment's last frame → *start*),
+resolved at launch as today. Filenames, editor chips, compile flags and the
+existing semantic names (`FLAGMAP`) all speak this one vocabulary.
+
+### Compilation (v1: flags only)
+
+V1 keeps the existing flag/gate mechanics and adds **flagging**, not
+translation machinery: the compile preview marks every attachment **exact /
+steered / unsupported** for a dialect, and the capability gate keeps refusing
+what a host cannot run.
+
+| segment attachments | dtcustom compile | dtofficial compile |
+|---|---|---|
+| `.i` ordered #1 | `--image` | `--image` (#1 = primary) |
+| `.i2`+ | none — at most one ordered image (engine crash beyond); flagged | `--image` #2..n, in order |
+| `.f` alone | `--image` if the positional slot is free (start-pinned; a lone `--first-frame` is invalid) — flagged | steered-only (prompt-carried) — flagged |
+| `.f` + `.l` | `--first-frame` + `--last-frame` (+ preflight) | start pinned + end steered (FL2VA-style prompt) — flagged steered |
+| `.m` middle | `--middle-frame` | steered-only — flagged |
+| `.l` alone | `--last-frame` | **indeterminable** (a lone image would read as the start) — flagged unsupported |
+| `.kNN` keyframe | `--keyframe path:NN:default` | steered-only — flagged |
+| continuity ⛓ (no `.f`) | start attachment: `--image`; `--first-frame` when paired with `.l` | start attachment `--image` #1 |
+| continuity ⛓ + `.f` | **FF wins** — the continuity frame is omitted from the argument list, with a note on the segment's stem line | same |
+| `--audio` | `--audio` | `--audio` |
+| prompt addressing | not needed | prompt addresses `<Picture N>` / `<Subject N>` per the H3 guides |
+
+Keyframe strength: engine default in v1 (`.kNN` carries the index only).
+
+### The editor (C) — `/next` "Audio E1" tab
+
+A clone of the audio-batch panel (old panel byte-frozen), pairs-panel DNA:
+parse → review/edit → queue.
+
+1. Drop/pick the segment folder (or a server path) → parse wavs, prompts,
+   configs and role-suffixed images; unrecognized files listed in the tray.
+2. One row per segment: image chips (thumbnail · target dropdown · remove),
+   add/replace from a palette of the dropped folder's images, ordered-image
+   reordering, keyframe index on the chip, and the continuity ghost chip
+   (per-segment toggle, defaulted from the batch checkbox).
+3. **Compile preview** — per segment and per dialect: the exact flags that
+   will be issued, every attachment marked exact / steered / unsupported;
+   continuity-omitted cases annotated on the stem line. Errors block the
+   queue button; steered/unsupported items stay visible as flags.
+4. Queue → jobs store semantic attachments; dispatch compiles per the target
+   host's dialect (`auto` shows both branches in the preview).
+
+### Validation taxonomy
+
+- **error** (blocks the queue): two files claiming one single slot
+  (two `.f`, two `.m`, two `.l`); two files claiming the same order number
+  (`.i` + `.i1`); overfull dtcustom positionals (`.i2`+, or `.f`-as-`--image`
+  together with an ordered `.i`).
+- **warning** (visible flag): steered-only targets on dtofficial;
+  continuity omitted because the segment targets `.f`; `.f` alone on dtcustom
+  (compiles as `--image`).
+- **info**: continuity attached; non-grid frame pads/trims (unchanged).
+
+### API sketch (mirrors the pairs routes)
+
+```
+POST /api/add-batch-e1/preview              stage a folder / plan segments + attachments
+GET  /api/add-batch-e1/<sid>                read the session (segments, attachments, warnings)
+PUT  /api/add-batch-e1/<sid>/manifest       autosave the edited attachment truth
+POST /api/add-batch-e1/<sid>/queue          validate + create jobs
+GET  /api/add-batch-e1/<sid>/file/<name>    staged thumbs for the editor
+POST /api/add-batch-e1/<sid>/discard
+```
+
+Plus a headless `ltxq add-batch-e1 <dir>` sharing parse + compile, so the
+contract is testable without the UI (`test_e1*` alongside `test_pairs*`).
+
+### Phasing
+
+1. Parser + compiler + `add-batch-e1` CLI + tests (the contract).
+2. Preview/queue API over the same functions.
+3. Panel in `/next` (new tab ids, feature markers; old panel untouched).
+4. Docs: the dialect translation matrix lands (see `docs/cli-dialects.md`
+   area, `docs/dialect-translation.md` TBD), changelog entry, and the
+   `ltxq-dialects` skill picks up the compile rules.
+
+### Decisions locked (2026-10-13)
+
+- V1 inputs: sidecars (A) + editor (C); no manifest file input (the editor
+  state can serialize to one later).
+- Tier handling v1: **flag only** — exact / steered / unsupported markings
+  plus the existing capability gates; no auto-translation yet.
+- Continuity: attaches as the start attachment unless the segment targets
+  `.f` — then the FF image wins and the continuity frame is omitted with a
+  stem-line note.
+- Keyframe strength: engine default in v1.
+- Placement: `/next`, "Audio E1" tab; the basic panel stays.
+
+### Open questions
+
+- When to promote steered/unsupported from "flag" to a translate/refuse
+  policy — and whether dtofficial translation auto-writes the H3 prompt
+  addressing.
+- The dtofficial end-frame path (`.l` → FL2VA prompt): reuse the pairs
+  composer's `minimax-h3-fl2va` directive machinery?
+- Retiring the basic panel once E1 reaches parity.
+- Per-segment chain default UX (inherit the batch checkbox vs explicit rows).
+
+---
+
 ## Candidate backlog (one-liners, to be expanded when picked up)
 
 - **Idea 3 — Built-in segmenter**: the producer side of Idea 1 — ffprobe/ffmpeg
