@@ -201,6 +201,33 @@ When a drift report lands: classify the changed arguments (see
 `flags`/feature booleans if needed, and refresh the snapshot with `--update`.
 That is a data edit, not a code hunt.
 
+## Dialect translation matrix (v1, flags-only)
+
+How a job's attachments map when a render lands on the other dialect. Tiers:
+**exact** — deterministic on both sides; **steered** — expressible only as an
+ordered reference plus a prompt-carried role (not implemented in v1: the
+compiler refuses instead of silently dropping); **none** — no expression.
+
+| role | `dtcustom` (LTX-2.3 FFLF) | `dtofficial` (H3 Ref2VA path) | tier |
+|---|---|---|---|
+| start / primary | `--image` #1 (start-pinned i2v) | `--image` #1 (primary; role declared in the prompt) | exact |
+| first frame | `--first-frame` (pairs only; alone compiles as `--image`) | `--image` #1 (alone) | exact |
+| first + last | `--first-frame` + `--last-frame` (+ preflight) | image #1 pins the start; the end is sent as an ordered reference, role steered by the prompt | steered |
+| last only | `--last-frame` | sent as an ordered reference **when anchored** by continuity/first/ordered — else a lone `--image` would read as the start | steered (anchor required) |
+| middle / keyframe | `--middle-frame` / `--keyframe idx:str` | sent as ordered references, role prompt-carried | steered |
+| ordered refs (2+) | no expression (>1 `--image` crashes the CLI) | `--image` #2..n in order (prompt `<Picture N>` / `<Subject N>`) | exact on dtofficial only |
+| audio | `--audio` | `--audio` | exact |
+
+Carriers: `dtcustom` puts the role in the **argument**, `dtofficial` in the
+**prompt** — so a translated job must rewrite its prompt to address
+`<Picture N>` (see docs/reference/minimax-full-reference-guide.md) before the
+steered tiers become usable. v1 sends steered roles as ordered `--image`
+references (with continuity on, the chain frame leads as image #1 so the
+numbered images keep their order after it); prompts are not rewritten yet, so
+the role assignment stays best-effort. Unanchored singletons still refuse, and
+auto-hosted jobs route by capability (`multi_image`, `keyframe`, …) instead of
+degrading silently.
+
 ## Adding a third dialect
 
 1. Add an entry to `DIALECTS` in `ltxq.py` with `label`, `generate_cmd`,

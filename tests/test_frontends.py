@@ -27,7 +27,12 @@ NEXT = STATIC / "index-next.html"
 # ids that belong to /next's composer shell (tabs + panels) — the only allowed
 # structural difference between the two files.
 NEXT_ONLY_IDS = {"panel-single", "panel-audio", "tab-single", "tab-audio",
-                 "panel-pairs", "tab-pairs"}
+                 "panel-pairs", "tab-pairs",
+                 # Audio batch E1 (Idea 8) — /next only
+                 "tab-audioe1", "panel-audioe1", "e1model", "e1host", "e1ext",
+                 "e1dir", "e1folder", "e1prompt", "e1seed", "e1batch", "e1cfg",
+                 "e1chain", "e1parse", "e1queue", "e1msg", "e1plan", "e1sum",
+                 "e1sid", "e1warnings", "e1rows", "e1tray"}
 
 # A string that marks a feature both dashboards must expose.
 FEATURE_MARKERS = (

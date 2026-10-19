@@ -66,6 +66,11 @@ tr.strip svg { margin-right:5px; vertical-align:-2px; }
 tr.strip .sep { margin:0 6px; opacity:.55; }
 tr.hl td { background:var(--tint-hl); }
 tr.strip.hl td { background:#1f262f; }
+/* Audio batch E1 (Idea 8): attachment chips (thumb + target + order/index) */
+.e1chip { display:flex; align-items:center; gap:6px; background:#20262e;
+          border:1px solid var(--edge); border-radius:6px; padding:4px 6px; }
+.e1chip img { height:34px; border-radius:4px; display:block; }
+.e1chip select, .e1chip input[type=number] { width:auto; }
 form .grid { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
 #flash { position:fixed; right:16px; top:16px; z-index:5; display:none;
          max-width:420px; }
@@ -170,6 +175,8 @@ a { color:var(--acc); text-decoration:none; }
             aria-selected="true" aria-controls="panel-single">Single</button>
     <button type="button" role="tab" id="tab-audio" data-mode-tab="audio"
             aria-selected="false" aria-controls="panel-audio">Audio segments</button>
+    <button type="button" role="tab" id="tab-audioe1" data-mode-tab="audioe1"
+            aria-selected="false" aria-controls="panel-audioe1">Audio E1</button>
     <button type="button" role="tab" id="tab-pairs" data-mode-tab="pairs"
             aria-selected="false" aria-controls="panel-pairs">Keyframe pairs</button>
   </div>
@@ -327,6 +334,52 @@ a { color:var(--acc); text-decoration:none; }
         <span class="sub" id="batchmsg"></span>
       </div>
     </form>
+  </div>
+  </div>
+
+  <div id="panel-audioe1" role="tabpanel" aria-labelledby="tab-audioe1" hidden>
+  <div class="sub" style="margin:-4px 0 8px">multi-image audio segments (Idea 8) —
+    role-suffixed sidecars (.i/.iN/.f/.m/.l/.kNN) parse into editable chips;
+    the compile preview marks every attachment exact / steered / unsupported
+    per dialect</div>
+  <div class="card">
+    <div class="row">
+      <div style="flex:2; min-width:220px"><label>Model</label>
+        <select id="e1model" required><option value="">loading…</option></select></div>
+      <div style="flex:1; min-width:120px"><label>Host</label>
+        <select id="e1host" style="width:auto"><option value="">auto</option></select></div>
+      <div style="flex:1; min-width:90px"><label>Ext</label>
+        <select id="e1ext" style="width:auto"><option>mov</option><option>mp4</option><option>png</option></select></div>
+    </div>
+    <div class="row" style="margin-top:4px">
+      <div class="grow" style="min-width:240px"><label>Segment folder (on this machine)</label>
+        <input id="e1dir" class="mono" placeholder="/path/to/segments"></div>
+      <div style="min-width:250px"><label>…or drop the folder here / pick it</label>
+        <div class="filerow"><label class="filedrop" tabindex="0" data-dz="e1seg">
+          <input type="file" id="e1folder" webkitdirectory multiple>
+          <span class="dz-label">choose folder (uploads the files)</span></label></div></div>
+    </div>
+    <label>Shared prompt — segments without a <span class="mono">.txt</span> sidecar</label>
+    <textarea id="e1prompt" style="min-height:48px"></textarea>
+    <div class="row" style="margin-top:8px">
+      <div><label>Seed</label><input id="e1seed" type="number" style="width:110px"></div>
+      <div><label>Batch label</label><input id="e1batch" placeholder="default: manifest / folder name"></div>
+      <div><label>Config JSON overlay</label><input id="e1cfg" class="mono" placeholder='{"steps": 9} — optional'></div>
+      <div><label>Continuity default</label>
+        <label style="display:flex;gap:6px;align-items:center;margin-top:6px;font-size:12px">
+          <input type="checkbox" id="e1chain" style="width:auto"> ⛓ start from previous last frame</label></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button type="button" id="e1parse">Parse folder</button>
+      <button type="button" id="e1queue" disabled>Queue batch</button>
+      <span class="sub" id="e1msg"></span>
+    </div>
+  </div>
+  <div class="card" id="e1plan" hidden>
+    <div class="row"><b id="e1sum"></b><span class="grow"></span><span class="sub mono" id="e1sid"></span></div>
+    <div id="e1warnings"></div>
+    <div id="e1rows"></div>
+    <div class="sub" id="e1tray" style="margin-top:6px"></div>
   </div>
   </div>
 
@@ -1178,7 +1231,7 @@ connectEvents();
 function syncHostOptions(hosts) {
   const want = '<option value="">auto (hosts.yaml order)</option>' +
     hosts.map(h => `<option>${esc(h.alias)}</option>`).join("");
-  for (const id of ["host", "bhost", "phost"]) {
+  for (const id of ["host", "bhost", "phost", "e1host"]) {
     const sel = $(id);
     if (sel.dataset.opts === want) continue;   // option set unchanged
     const keep = sel.value;
@@ -1198,15 +1251,17 @@ async function loadModels(alias, target = "both") {
     lastHosts = st.hosts || []; updateDialectHint();
   } catch (e) {}
   const msg = target === "batch" ? $("batchmsg")
-            : target === "pairs" ? $("pairsmsg") : $("addmsg");
+            : target === "pairs" ? $("pairsmsg")
+            : target === "e1" ? $("e1msg") : $("addmsg");
   try {
     const m = await api("/api/models/" + (alias || "ltx-a"));
     const opts = m.models.map(x =>
       `<option value="${esc(x.model)}">${esc(x.name)}</option>`).join("")
       || '<option value="">none downloaded</option>';
-    if (target !== "batch") $("model").innerHTML = opts;
-    if (target !== "job")   $("bmodel").innerHTML = opts;
+    if (target !== "batch" && target !== "e1") $("model").innerHTML = opts;
+    if (target !== "job" && target !== "e1")   $("bmodel").innerHTML = opts;
     if (target === "both" || target === "pairs") $("pmodel").innerHTML = opts;
+    if (target === "both" || target === "e1")    $("e1model").innerHTML = opts;
     if (m.error) msg.textContent = "models: " + m.error;
   } catch (e) { msg.textContent = e.message; }
 }
@@ -1217,6 +1272,7 @@ loadModels();
 // showed up in its Model dropdown
 $("host").onchange = () => { updateDialectHint(); loadModels($("host").value, "job"); };
 $("bhost").onchange = () => loadModels($("bhost").value, "batch");
+$("e1host").onchange = () => loadModels($("e1host").value, "e1");
 
 $("lastcfg").onclick = async () => {
   try {
@@ -1384,6 +1440,217 @@ $("batchform").onsubmit = async ev => {
     flash(`batch queued: ${r.jids.length} job(s)`);
     refresh();
   } catch (e) { $("batchmsg").textContent = ""; flash(e.message, true); }
+};
+
+
+// ---- Audio batch E1 (Idea 8): parse -> per-segment chips -> compile -> queue ----
+let e1Files = [], e1Sid = null, e1PlanData = null, e1Images = [], e1Edits = {};
+let e1SaveT = null;
+const e1Dz = document.querySelector('[data-dz="e1seg"]');
+const e1Inp = $("e1folder");
+function e1Sync() {
+  e1Dz.classList.toggle("filled", !!e1Files.length);
+  e1Dz.querySelector(".dz-label").textContent = e1Files.length
+    ? `${e1Files.length} files selected` : "choose folder (uploads the files)";
+}
+e1Inp.addEventListener("change", () => { e1Files = [...e1Inp.files]; e1Sync(); });
+e1Dz.addEventListener("dragover", e => {
+  if ([...e.dataTransfer.types].includes("Files")) { e.preventDefault(); e1Dz.classList.add("over"); }
+});
+e1Dz.addEventListener("dragleave", () => e1Dz.classList.remove("over"));
+e1Dz.addEventListener("drop", async e => {
+  e1Dz.classList.remove("over");
+  const items = [...(e.dataTransfer.items || [])];
+  if (!items.length) return;
+  e.preventDefault();
+  const out = [];
+  for (const it of items) {
+    const en = it.webkitGetAsEntry && it.webkitGetAsEntry();
+    if (en) await collectDropped(en, out);
+    else if (it.kind === "file" && it.getAsFile()) out.push(it.getAsFile());
+  }
+  if (out.length) { e1Files = out; e1Sync(); }
+});
+
+function e1FormData() {
+  const fd = new FormData();
+  fd.set("model", $("e1model").value);
+  if ($("e1host").value) fd.set("host", $("e1host").value);
+  fd.set("ext", $("e1ext").value);
+  if ($("e1seed").value) fd.set("seed", $("e1seed").value);
+  if ($("e1batch").value) fd.set("batch", $("e1batch").value);
+  if ($("e1cfg").value.trim()) fd.set("config_json", $("e1cfg").value);
+  if ($("e1prompt").value.trim()) fd.set("prompt", $("e1prompt").value);
+  if ($("e1chain").checked) fd.set("chain", "1");
+  return fd;
+}
+
+function e1EditsFromPlan() {
+  const out = {};
+  for (const seg of (e1PlanData ? e1PlanData.segments : []))
+    out[seg.name] = {attachments: seg.attachments.map(x => ({...x})),
+                     continuity: !!seg.continuity};
+  return out;
+}
+
+$("e1parse").onclick = async () => {
+  const fd = e1FormData();
+  if (e1Files.length) for (const f of e1Files) fd.append("files", f, f.name);
+  else if ($("e1dir").value.trim()) fd.set("dir", $("e1dir").value.trim());
+  else return flash("pick a segment folder or enter its path", true);
+  $("e1msg").textContent = "parsing…";
+  try {
+    const r = await api("/api/add-batch-e1/preview", {method:"POST", body:fd});
+    e1Sid = r.sid; e1PlanData = r.plan; e1Images = r.images || [];
+    e1Edits = e1EditsFromPlan();
+    e1Render();
+    $("e1msg").textContent = `parsed ${r.plan.segments.length} segment(s)`;
+  } catch (e) { $("e1msg").textContent = ""; flash(e.message, true); }
+};
+
+function e1ScheduleSave() {
+  clearTimeout(e1SaveT);
+  e1SaveT = setTimeout(async () => {
+    if (!e1Sid) return;
+    try {
+      const r = await api(`/api/add-batch-e1/${e1Sid}/manifest`,
+        {method:"PUT", headers:{"Content-Type":"application/json"},
+         body: JSON.stringify({edits: e1Edits})});
+      e1PlanData = r.plan; e1Images = r.images || [];
+      e1Edits = e1EditsFromPlan();
+      e1Render();
+    } catch (e) { flash(e.message, true); }
+  }, 450);
+}
+
+function e1CompileLine(seg, d) {
+  const v = (seg.compile && seg.compile[d]) || {assets: [], extra: []};
+  const parts = (v.assets || []).map(([flag, p]) =>
+    (flag ? flag + " " : "") + String(p).split(/[\\/]/).pop());
+  return parts.concat(v.extra).join(" ") || "—";
+}
+
+function e1Render() {
+  const p = e1PlanData;
+  $("e1plan").hidden = !p;
+  if (!p) return;
+  $("e1sid").textContent = `session ${e1Sid} · host ${p.host || "auto"}`;
+  $("e1sum").textContent = `${p.segments.length} segment(s) · batch '${p.batch}'`
+    + (p.fps ? ` · ${p.fps} fps · grid ${p.grid[0]}n+${p.grid[1]}` : "");
+  $("e1warnings").innerHTML =
+    (p.errors && p.errors.length
+      ? `<div class="note st-bad">${p.errors.map(esc).join("<br>")}</div>` : "")
+    + (p.warnings && p.warnings.length
+      ? `<div class="note">${p.warnings.map(esc).join("<br>")}</div>` : "");
+  $("e1tray").textContent = p.tray && p.tray.length
+    ? "not attached: " + p.tray.map(t => t.reason).join(" · ") : "";
+  $("e1queue").disabled = !!(p.errors && p.errors.length);
+  $("e1rows").innerHTML = p.segments.map((seg, i) => {
+    const ed = e1Edits[seg.name] || {attachments: [], continuity: false};
+    const chips = ed.attachments.map((a, j) => {
+      const thumb = `/api/add-batch-e1/${e1Sid}/file/${encodeURIComponent(a.file)}`;
+      return `<div class="e1chip" data-seg="${esc(seg.name)}" data-idx="${j}">
+        <a href="${thumb}" target="_blank"><img src="${thumb}" alt=""></a>
+        <span class="mono sub" style="max-width:180px;overflow:hidden;text-overflow:ellipsis">${esc(a.file)}</span>
+        <select data-e1-target data-seg="${esc(seg.name)}" data-idx="${j}">
+          ${["ordered","first","middle","last","keyframe"].map(t =>
+              `<option value="${t}"${t === a.target ? " selected" : ""}>${t}</option>`).join("")}
+        </select>
+        ${a.target === "ordered" ? `<input type="number" min="1" style="width:54px" data-e1-order data-seg="${esc(seg.name)}" data-idx="${j}" value="${a.order || 1}" title="order">` : ""}
+        ${a.target === "keyframe" ? `<input type="number" min="0" style="width:64px" data-e1-index data-seg="${esc(seg.name)}" data-idx="${j}" value="${a.index || 0}" title="frame index">` : ""}
+        <button type="button" class="danger" data-e1-del data-seg="${esc(seg.name)}" data-idx="${j}" title="remove">${ICONS.x}</button>
+      </div>`;
+    }).join("");
+    const addRow = `<div class="row" style="gap:6px;margin-top:6px">
+        <select data-e1-add data-seg="${esc(seg.name)}"><option value="">add image…</option>
+          ${e1Images.filter(n => !ed.attachments.some(a => a.file === n))
+            .map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("")}
+        </select>
+        <button type="button" class="sec" data-e1-addbtn data-seg="${esc(seg.name)}">+ add</button>
+        <label style="display:flex;gap:5px;align-items:center;margin:0;font-size:11px">
+          <input type="checkbox" data-e1-cont data-seg="${esc(seg.name)}" style="width:auto"
+            ${ed.continuity ? "checked" : ""}> ⛓ continuity</label>
+        ${seg.continuity_omitted ? `<span class="sub">⛓ omitted — ${esc(seg.continuity_omitted)}</span>` : ""}
+      </div>`;
+    const tiers = ["dtcustom","dtofficial"].map(d => {
+      const v = (seg.compile && seg.compile[d])
+        || {assets: [], extra: [], tiers: [], errors: []};
+      const marks = (v.tiers || []).map(t => `${esc(t.file)}=${t.tier}`).join(", ");
+      return `<div class="sub mono" style="margin-top:2px"><b>${d}</b> → ${esc(e1CompileLine(seg, d))}`
+        + (marks ? `<br><span class="sub">tiers: ${marks}</span>` : "")
+        + (v.errors.length ? `<br><span class="st-bad">${v.errors.map(esc).join("; ")}</span>` : "")
+        + `</div>`;
+    }).join("");
+    return `<div class="card" style="margin:8px 0">
+      <div class="row"><b>#${i + 1} ${esc(seg.name)}</b>
+        <span class="sub">${seg.frames} frames · audio ${esc(String(seg.wav || "").split(/[\\/]/).pop())} · ${esc(seg.prompt_src)} prompt`
+        + (seg.cfg_file ? ` · config ${esc(seg.cfg_file)}` : "")
+        + (seg.note ? ` · ${esc(seg.note)}` : "") + `</span></div>
+      <div class="row" style="flex-wrap:wrap;gap:6px;margin-top:6px">${chips || '<span class="sub">no attachments</span>'}</div>
+      ${addRow}
+      ${tiers}
+    </div>`;
+  }).join("");
+  $("e1rows").querySelectorAll("[data-e1-target]").forEach(sel => {
+    sel.onchange = () => {
+      const ed = e1Edits[sel.dataset.seg];
+      const a = ed.attachments[+sel.dataset.idx];
+      a.target = sel.value;
+      if (a.target === "ordered" && !a.order) a.order = 1;
+      if (a.target === "keyframe" && a.index === undefined) a.index = 0;
+      e1ScheduleSave();
+    };
+  });
+  $("e1rows").querySelectorAll("[data-e1-order]").forEach(inp => {
+    inp.onchange = () => {
+      e1Edits[inp.dataset.seg].attachments[+inp.dataset.idx].order =
+        Math.max(1, +inp.value || 1);
+      e1ScheduleSave();
+    };
+  });
+  $("e1rows").querySelectorAll("[data-e1-index]").forEach(inp => {
+    inp.onchange = () => {
+      e1Edits[inp.dataset.seg].attachments[+inp.dataset.idx].index =
+        Math.max(0, +inp.value || 0);
+      e1ScheduleSave();
+    };
+  });
+  $("e1rows").querySelectorAll("[data-e1-del]").forEach(btn => {
+    btn.onclick = () => {
+      e1Edits[btn.dataset.seg].attachments.splice(+btn.dataset.idx, 1);
+      e1ScheduleSave();
+    };
+  });
+  $("e1rows").querySelectorAll("[data-e1-addbtn]").forEach(btn => {
+    btn.onclick = () => {
+      const sel = btn.parentElement.querySelector("select[data-e1-add]");
+      const file = sel && sel.value;
+      if (!file) return;
+      const ed = e1Edits[btn.dataset.seg];
+      const n = 1 + Math.max(0, ...ed.attachments
+        .filter(a => a.target === "ordered").map(a => a.order || 1));
+      ed.attachments.push({file, target: "ordered", order: n});
+      e1ScheduleSave();
+    };
+  });
+  $("e1rows").querySelectorAll("[data-e1-cont]").forEach(cb => {
+    cb.onchange = () => {
+      e1Edits[cb.dataset.seg].continuity = cb.checked;
+      e1ScheduleSave();
+    };
+  });
+}
+
+$("e1queue").onclick = async () => {
+  if (!e1Sid) return;
+  if (!confirm("Queue this E1 batch?")) return;
+  $("e1msg").textContent = "queueing…";
+  try {
+    const r = await api(`/api/add-batch-e1/${e1Sid}/queue`, {method:"POST"});
+    $("e1msg").textContent = `queued ${r.jids.length} job(s)`;
+    flash(`E1 batch queued: ${r.jids.length} job(s)`);
+    refresh();
+  } catch (e) { $("e1msg").textContent = ""; flash(e.message, true); }
 };
 
 // ---- pairs batch: parse a stills folder into an editable keyframe pair ----
@@ -1916,7 +2183,8 @@ pllLoadEndpoints();
 pllLoadDirectives();
 
 // ---- composer mode tabs (slice 1: shell only — both forms unchanged) ----
-const MODE_PANELS = { single: $("panel-single"), audio: $("panel-audio"), pairs: $("panel-pairs") };
+const MODE_PANELS = { single: $("panel-single"), audio: $("panel-audio"),
+                      pairs: $("panel-pairs"), audioe1: $("panel-audioe1") };
 function setMode(mode) {
   if (!MODE_PANELS[mode]) mode = "single";
   for (const [name, panel] of Object.entries(MODE_PANELS)) {

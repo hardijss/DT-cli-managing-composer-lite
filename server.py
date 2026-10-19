@@ -768,6 +768,246 @@ def api_add_batch():
             shutil.rmtree(staged_dir, ignore_errors=True)
 
 
+# --- Audio batch E1 (Idea 8): multi-image attachments, dialect-aware preview.
+# Two-phase like /api/pairs: preview stages a folder and plans the segments,
+# the dashboard edits attachments (autosaved via PUT), and /queue re-validates
+# server-side before creating any job. Sessions are file-based in STAGE.
+
+E1_SID_RE = re.compile(r"[0-9a-f]{8}\Z")
+
+
+def _e1_dir(sid):
+    return STAGE / f"e1_{sid}"
+
+
+def _e1_sid_ok(sid):
+    return bool(E1_SID_RE.match(sid or "")) and _e1_dir(sid).is_dir()
+
+
+def _e1_gc(max_age_s=7 * 86400):
+    """Prune abandoned E1 sessions (job dirs own their files after queueing)."""
+    now = time.time()
+    for p in STAGE.glob("e1_*"):
+        if p.is_dir():
+            try:
+                if now - p.stat().st_mtime > max_age_s:
+                    shutil.rmtree(p, ignore_errors=True)
+            except OSError:
+                pass
+
+
+def _e1_opts(f):
+    """E1-panel options from form fields (or a dict). Returns (opts, error)."""
+    model = (f.get("model") or "").strip()
+    if not model or ".." in model or model.startswith("/"):
+        return None, "model is required"
+    onn = f.get("on_non_grid") or "round-up"
+    if onn not in ("round-up", "round-down", "refuse"):
+        return None, "invalid on_non_grid"
+    try:
+        seed = f.get("seed")
+        seed = int(seed) if seed not in (None, "") else None
+    except (TypeError, ValueError):
+        return None, "invalid seed"
+    ext = f.get("ext") or "mov"
+    if ext not in ("mov", "mp4", "png"):
+        return None, "invalid ext"
+    backend = (f.get("backend") or "").strip() or None
+    if backend not in (None, "oneshot", "serve"):
+        return None, "invalid backend"
+    return {"model": model, "host": (f.get("host") or "").strip() or None,
+            "ext": ext, "backend": backend, "seed": seed,
+            "batch": (f.get("batch") or "").strip() or None,
+            "config_json": (f.get("config_json") or "").strip() or None,
+            "prompt": (f.get("prompt") or "").strip() or None,
+            "chain": bool(f.get("chain")),
+            "on_non_grid": onn}, None
+
+
+def _e1_namespace(manifest, staging):
+    """The ltxq.e1_plan namespace for a stored session."""
+    opts = manifest["opts"]
+    pf = staging / "shared_prompt.txt"
+    cfgf = staging / "base_config.json"
+    return argparse.Namespace(
+        dir=manifest["dir"], model=opts["model"], host=opts.get("host"),
+        ext=opts.get("ext") or "mov", backend=opts.get("backend"),
+        seed=opts.get("seed"), batch=opts.get("batch"),
+        config_file=str(cfgf) if cfgf.exists() else None,
+        config_json=opts.get("config_json"),
+        prompt_file=str(pf) if pf.exists() else None,
+        manifest=None, on_non_grid=opts.get("on_non_grid") or "round-up",
+        chain=bool(opts.get("chain")), dry_run=True)
+
+
+def _e1_payload(c, con, sid, manifest):
+    """Plan + editable manifest for the client. Read-only."""
+    staging = _e1_dir(sid)
+    ns = _e1_namespace(manifest, staging)
+    plan = ltxq.e1_plan(manifest["dir"], ns, c, con,
+                        edits=manifest.get("edits") or None)
+    plan.pop("obj", None)
+    for seg in plan["segments"]:
+        seg.pop("prompt", None)      # keep payloads small; prompts stay server-side
+    try:
+        images = sorted(p.name for p in Path(manifest["dir"]).iterdir()
+                        if p.is_file()
+                        and p.suffix.lower() in ltxq.E1_IMG_EXTS)
+    except OSError:
+        images = []
+    return {"sid": sid, "manifest": manifest, "plan": plan,
+            "images": images[:400]}
+
+
+@app.post("/api/add-batch-e1/preview")
+def api_e1_preview():
+    """Stage a segment folder and plan it. The folder comes either as uploaded
+    files (webkitdirectory picker) or as a server-side directory path."""
+    _e1_gc()
+    f = flask.request.form
+    opts, err = _e1_opts(f)
+    if err:
+        return flask.jsonify(error=err), 400
+    ups = flask.request.files.getlist("files")
+    src = (f.get("dir") or "").strip()
+    if not ups and not src:
+        return flask.jsonify(error="pick a folder or enter a segment "
+                                   "directory path"), 400
+    sid = uuid.uuid4().hex[:8]
+    staging = _e1_dir(sid)
+    staging.mkdir(parents=True)
+    try:
+        if ups:
+            _stage_uploads(staging, ups)
+            manifest_dir = str(staging)
+        else:
+            typed = Path(src).expanduser()
+            if not typed.is_dir():
+                shutil.rmtree(staging, ignore_errors=True)
+                return flask.jsonify(error=f"not a directory: {typed}"), 400
+            manifest_dir = str(typed)
+        if opts.get("prompt"):
+            (staging / "shared_prompt.txt").write_text(opts["prompt"])
+        if not (HERE / "templates" / f"{opts['model']}.json").exists():
+            with contextlib.closing(ltxq.db()) as con0:
+                row = con0.execute(
+                    "SELECT config_text FROM jobs WHERE status='done' AND "
+                    "config_text IS NOT NULL ORDER BY created_at DESC"
+                ).fetchone()
+            if not row:
+                shutil.rmtree(staging, ignore_errors=True)
+                return flask.jsonify(
+                    error="no config: add templates/" + opts["model"] +
+                          ".json or run 'Fill config from last job' on the "
+                          "main form once"), 400
+            (staging / "base_config.json").write_text(row["config_text"])
+        manifest = {"version": 1, "sid": sid, "dir": manifest_dir,
+                    "opts": opts, "edits": {}}
+        (staging / "manifest.json").write_text(json.dumps(manifest, indent=2))
+        c, con = ltxq.conf(), ltxq.db()
+        try:
+            payload = _e1_payload(c, con, sid, manifest)
+        finally:
+            con.close()
+    except OSError as e:
+        shutil.rmtree(staging, ignore_errors=True)
+        return flask.jsonify(error=str(e)), 400
+    return flask.jsonify(**payload)
+
+
+@app.get("/api/add-batch-e1/<sid>")
+def api_e1_get(sid):
+    """Re-fetch a session (refresh recovery): stored edits + fresh plan."""
+    if not _e1_sid_ok(sid):
+        return flask.jsonify(error="no such E1 session"), 404
+    staging = _e1_dir(sid)
+    manifest = json.loads((staging / "manifest.json").read_text())
+    c, con = ltxq.conf(), ltxq.db()
+    try:
+        payload = _e1_payload(c, con, sid, manifest)
+    finally:
+        con.close()
+    return flask.jsonify(**payload)
+
+
+@app.put("/api/add-batch-e1/<sid>/manifest")
+def api_e1_put(sid):
+    """Autosave the editor's edits (per-segment attachments + continuity) and
+    re-derive the plan. Only editable fields are taken from the client."""
+    if not _e1_sid_ok(sid):
+        return flask.jsonify(error="no such E1 session"), 404
+    body = flask.request.get_json(silent=True) or {}
+    staging = _e1_dir(sid)
+    manifest = json.loads((staging / "manifest.json").read_text())
+    edits = body.get("edits")
+    if edits is not None:
+        if not isinstance(edits, dict):
+            return flask.jsonify(error="edits must be an object keyed by "
+                                       "segment name"), 400
+        manifest["edits"] = edits
+    if isinstance(body.get("batch"), str):
+        manifest["opts"]["batch"] = body["batch"].strip() or None
+    (staging / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    c, con = ltxq.conf(), ltxq.db()
+    try:
+        payload = _e1_payload(c, con, sid, manifest)
+    finally:
+        con.close()
+    return flask.jsonify(**payload)
+
+
+@app.post("/api/add-batch-e1/<sid>/queue")
+def api_e1_queue(sid):
+    """Validate the stored edits server-side, then create the jobs."""
+    if not _e1_sid_ok(sid):
+        return flask.jsonify(error="no such E1 session"), 404
+    staging = _e1_dir(sid)
+    manifest = json.loads((staging / "manifest.json").read_text())
+    c, con = ltxq.conf(), ltxq.db()
+    try:
+        ns = _e1_namespace(manifest, staging)
+        plan = ltxq.e1_plan(manifest["dir"], ns, c, con,
+                            edits=manifest.get("edits") or None)
+        if plan["errors"]:
+            shown = "; ".join(plan["errors"][:8])
+            if len(plan["errors"]) > 8:
+                shown += f" (+{len(plan['errors']) - 8} more)"
+            return flask.jsonify(error=shown), 400
+        out, err = _capture(ltxq.e1_queue, plan, ns, c, con)
+        if err:
+            return flask.jsonify(error=err[-800:]), 400
+        jids = re.findall(r"^([0-9a-f]{10})\s", out, re.M)
+        for jid in jids:
+            _publish_job(jid)
+        return flask.jsonify(jids=jids, report=out)
+    finally:
+        con.close()
+
+
+@app.get("/api/add-batch-e1/<sid>/file/<path:name>")
+def api_e1_file(sid, name):
+    """Serve a staged image for editor thumbnails (session dir first, then the
+    typed segment dir). Bare basenames only."""
+    if not _e1_sid_ok(sid):
+        return flask.jsonify(error="no such E1 session"), 404
+    staging = _e1_dir(sid)
+    manifest = json.loads((staging / "manifest.json").read_text())
+    base = Path(name).name
+    for d in (staging, Path(manifest["dir"])):
+        p = d / base
+        if p.is_file() and p.parent == d:
+            return flask.send_from_directory(d, base)
+    return flask.jsonify(error="not found"), 404
+
+
+@app.post("/api/add-batch-e1/<sid>/discard")
+def api_e1_discard(sid):
+    if not _e1_sid_ok(sid):
+        return flask.jsonify(error="no such E1 session"), 404
+    shutil.rmtree(_e1_dir(sid), ignore_errors=True)
+    return flask.jsonify(ok=True)
+
+
 # --- keyframe-pair batch (ltxq add-pairs; docs/expansion-of-this-idea.md Idea 2)
 # Two-phase: /preview stages a stills folder and plans the pair sequence (the
 # model-independent manifest, the editable truth), the dashboard edits it

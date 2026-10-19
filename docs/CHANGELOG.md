@@ -2,6 +2,54 @@
 
 All notable changes, bug fixes, and feature additions to `ltxq` are documented here.
 
+## [Unreleased] - 2026-10-17
+
+### Feature: Audio batch E1 — multi-image attachment with dialect-aware compilation
+
+- **`ltxq.py`**: new `add-batch-e1 <dir>` composer (Idea 8) on top of the
+  audio-batch pipeline. Role-suffixed sidecars parse into per-segment
+  attachments — `<stem>.i` / `.i2` / `.i3` ordered images (legacy
+  `<stem>.png` = `.i`), `.f` / `.m` / `.l` single frame slots, `.kNN`
+  keyframes — and compile per dialect: named slots on `dtcustom`, ordered
+  `--image` on `dtofficial` (where `.f` becomes image #1 and `.m`/`.l`/`.kNN`
+  ride the ordered list as prompt-carried references, marked *steered*; a
+  lone reference still refuses because a single `--image` would read as the
+  start). `--dry-run` prints the
+  plan with both dialects' compiled flags and exact/steered/unsupported
+  tiers. New `multi_image` capability (dtcustom lacks it — its CLI crashes
+  on >1 `--image`), so multi-image jobs route to dtofficial instead of
+  crashing. Continuity: an explicit first-frame target wins over the chain
+  (the frame is omitted, noted on the stem line); a last-frame target
+  upgrades the chain frame to a pinned first/last pair on dtcustom; on
+  dtofficial the chain frame leads the ordered list as image #1
+  (`chain: image_first`), so continuity composes with numbered references.
+  The panel's continuity default now applies to segments 2..N (segment 1 has
+  no predecessor), is stored in the session opts, and the editor's per-row
+  toggles override it.
+  `cli_cmd()` resolves `$HOME` from the probed host row before quoting —
+  fixes `ltxq probe` (CLI check), `ltxq flags` and the dispatch-time
+  `--fflf-preflight` on `~/…` cli_paths (the old single-quoted form never
+  expanded remotely).
+- **`server.py`**: `/api/add-batch-e1/{preview,<sid>,<sid>/manifest,
+  <sid>/queue,<sid>/file/<name>,<sid>/discard}` — a pairs-style two-phase
+  session (parse → edit attachments/continuity → validate → queue), with
+  file-based sessions staged in `jobs/_tmp/e1_<sid>`.
+- **`static/index-next.html`**: "Audio E1" tab (experimental; the existing
+  audio-batch panel is untouched): parse a folder, per-segment image chips
+  with target selects plus order/keyframe inputs, palette add, per-segment
+  continuity toggles, a per-dialect compile preview, and a queue button that
+  is blocked while the plan has errors. Edits autosave via PUT.
+- **`docs/`**: Idea 8 marked Done (v1); `cli-dialects.md` gains the
+  translation matrix (flags-only v1); `features.md` lists the E1 panel.
+- **`tests/`**: `test_e1.py` (suffix vocabulary, compile matrix, continuity
+  rules, routing/refusal, queue tail, `cli_cmd`) and `test_e1_api.py`
+  (preview → PUT edits → queue → discard, staged-file serving);
+  `test_frontends.py` NEXT_ONLY_IDS extended; the two API suites now pin
+  their module globals per class so they can share one discovery process.
+- Verified: full unittest suite green (163 tests); `node --check` clean on
+  the /next script; `add-batch-e1 --dry-run` checked against a role-suffixed
+  fixture (both dialects' flags + tiers).
+
 ## [Unreleased] - 2026-10-12
 
 ### Fix: history time column shows actual generation time

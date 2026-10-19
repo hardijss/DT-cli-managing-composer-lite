@@ -82,6 +82,12 @@
   segment 1, and a "Copy from New job" button (model, host, ext, seed,
   config overlay, prompt); validation failures list every offending segment
   and queue nothing
+- **Audio batch E1 panel** (`/next` tab, experimental): role-suffixed sidecar
+  images (`.i`/`.iN`/`.f`/`.m`/`.l`/`.kNN`, legacy `<stem>.png` = `.i`) parse
+  into per-segment attachment chips with target selects plus order/keyframe
+  inputs; edits autosave via `PUT /api/add-batch-e1/<sid>/manifest` and the
+  panel shows a per-dialect compile preview (exact / steered / unsupported)
+  before queueing. The basic audio-batch panel is untouched.
 - **Pairs batch panel**: parse a stills folder (drop/pick or a server-side
   path) into an editable pair sequence — the pair list is the editable truth
   (reorder ↑/↓, delete with a seam warning, append-and-move inserts, assign

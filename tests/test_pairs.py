@@ -393,7 +393,8 @@ class QueueTests(PairsBase):
                          [("--image", "image0001.png"), ("--image", "image0002.png")])
         caps = ltxq.job_caps(jobs[0])
         self.assertNotIn("fflf_preflight", caps)
-        self.assertEqual(caps, {"image"})
+        # dtofficial allows multi-image; dtcustom does not (its CLI crashes)
+        self.assertEqual(caps, {"image", "multi_image"})
         runner = (Path(jobs[0]["local_dir"]) / "runner.sh").read_text()
         self.assertIn("--image image0001.png --image image0002.png", runner)
 

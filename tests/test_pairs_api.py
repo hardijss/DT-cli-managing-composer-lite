@@ -56,6 +56,17 @@ def stills_dir(name, numbers=(1, 2, 3), prefix="image", prompts=True):
 class PairsApiBase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # Another API suite (E1) shares this process and may have re-pointed
+        # the module globals at import/class time; pin this suite's tree at
+        # class start so both suites can coexist under one discovery run.
+        ltxq.DB_PATH = TMP / "ltxq.db"
+        ltxq.HERE = TMP
+        ltxq.CONF_PATH = TMP / "hosts.yaml"
+        ltxq._DB_INITED = False
+        ltxq._img_dims = lambda p: (128, 128)
+        ltxq._wav_duration = lambda p: 4.84
+        server.HERE = TMP
+        server.STAGE = TMP / "jobs" / "_tmp"
         cls.client = server.app.test_client()
         cls.con = ltxq.db()
 

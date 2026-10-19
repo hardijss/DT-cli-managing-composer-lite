@@ -93,6 +93,8 @@ GENOPT = re.compile(r"^\s{2,8}(?:-[a-zA-Z],\s)?(--[A-Za-z0-9-/]+)", re.M)
 #   label     human name for notes/docs/UI
 #   serve     does the binary have the `serve` warm-worker subcommand?
 #   fflf_preflight  does it accept `generate ... --fflf-preflight`?
+#   multi_image     does it accept more than one --image? (dtcustom: no —
+#                   its CLI crashes; dtofficial: yes)
 #   strict_frames  does it REJECT a --frames count off the model's grid
 #                  (LTX/WAN 8n+1, MiniMax H3 17n+5) instead of rounding up?
 #                  Documented fact, not enforced yet — see docs/cli-dialects.md
@@ -123,6 +125,7 @@ DIALECTS = {
         "generate_cmd": "generate",
         "serve": True,
         "fflf_preflight": True,
+        "multi_image": False,
         # a --frames count off the model's grid is NOT rejected (rounds up)
         "strict_frames": False,
         "flags": {
@@ -151,6 +154,7 @@ DIALECTS = {
         "generate_cmd": "generate",
         "serve": False,
         "fflf_preflight": False,
+        "multi_image": True,
         # --frames off the model's grid is a hard usage error (exit 64)
         "strict_frames": True,
         "cap_hints": {
@@ -208,7 +212,7 @@ class UnsupportedFlag(ValueError):
 
 PROBE_SH = '''
 echo "HOME=$HOME"; echo "UNAME=$(uname -s)"
-test -x {cli} && echo "CLI=ok" || echo "CLI=missing"
+test -x "{cli}" && echo "CLI=ok" || echo "CLI=missing"
 echo "EV=$DRAWTHINGS_MODELS_DIR"
 cand() {{
   [ -d "$1" ] || return 0
@@ -614,6 +618,20 @@ def cli_of(c, h):
         return h["cli_path"]
     return c["cli_path"]
 
+def cli_cmd(h, c):
+    """Shell token for a host's engine-CLI path, safe to embed in a remote
+    command. `$HOME` is resolved from the probed host row BEFORE quoting:
+    single quotes stop the remote shell expanding it, so a `~/…` cli_path must
+    be made absolute here (serve-start already relied on the same rule)."""
+    p = dollar_home(cli_of(c, h))
+    try:
+        home = (h["home"] if h is not None else "") or ""
+    except (KeyError, IndexError):
+        home = ""
+    if home:
+        p = p.replace("$HOME", home, 1)
+    return shlex.quote(p)
+
 def video_format_of(c, h):
     """--video-format preset: global hosts.yaml default, per-host override.
     An explicit empty string on a host omits the flag entirely."""
@@ -655,7 +673,7 @@ def dialect_has(spec, cap):
     """Can this dialect satisfy capability `cap`? `cap` is a feature boolean
     (`serve`, `fflf_preflight`) or a semantic flag name (an asset slot, or
     `keyframe` for the raw --keyframe* family)."""
-    if cap in ("serve", "fflf_preflight"):
+    if cap in ("serve", "fflf_preflight", "multi_image"):
         return bool(spec.get(cap))
     return cap in spec["flags"]
 
@@ -693,14 +711,25 @@ def job_caps(job, host_backend=None):
     caps = set()
     if (job["backend"] or host_backend or "oneshot") == "serve":
         caps.add("serve")
+    image_n = 0
     for a in json.loads(job["assets"] or "[]"):
         sem = _FLAG_SEMANTIC.get(a.get("flag"))
         if sem:
             caps.add(sem)
+            if sem == "image":
+                image_n += 1
     for t in json.loads(job["extra_args"] or "[]"):
         sem = extra_semantic(t)
         if sem:
             caps.add(sem)
+    if image_n >= 2:
+        caps.add("multi_image")     # dtcustom's CLI crashes on >1 --image
+    try:
+        chain_slot = job["chain"]
+    except (KeyError, IndexError):
+        chain_slot = None
+    if chain_slot == "image_first":
+        caps.add("multi_image")     # the chain frame is a second --image
     if {"first_frame", "last_frame"} <= caps:
         caps.add("fflf_preflight")
     return caps
@@ -792,7 +821,7 @@ def note_unroutable(c, con):
 def probe(con, c, alias):
     hrow = con.execute("SELECT cli_path FROM hosts WHERE alias=?", (alias,)).fetchone()
     cli = (hrow and hrow["cli_path"]) or c["cli_path"]
-    r = ssh(alias, PROBE_SH.format(cli=shlex.quote(dollar_home(cli))))
+    r = ssh(alias, PROBE_SH.format(cli=dollar_home(cli)))
     if r.returncode != 0:
         print(f"{alias}: UNREACHABLE: {r.stderr.strip()[:200]}"); return
     home, ev, cands = "", "", []
@@ -899,7 +928,7 @@ def launch(c, con, h, job):
         if not h["home"]:
             set_job(con, job["id"], status="queued",
                     note="host unreachable — probe failed"); return
-    note = resolve_chain(con, job)
+    note = resolve_chain(con, job, dialect)
     if note:
         set_job(con, job["id"], note=note)
         job = con.execute("SELECT * FROM jobs WHERE id=?", (job["id"],)).fetchone()
@@ -946,7 +975,7 @@ def launch(c, con, h, job):
     # transport errors skip the check, an engine-level failure fails the job.
     pf_note = ""
     if {"--first-frame", "--last-frame"} <= {a.get("flag") for a in assets}:
-        pf = (f"cd {shlex.quote(rd)} && {shlex.quote(dollar_home(cli_of(c, h)))} "
+        pf = (f"cd {shlex.quote(rd)} && {cli_cmd(h, c)} "
               f"{dialect_spec(dialect)['generate_cmd']} "
               f"{gen_args(job['model'], assets, extra, c, ext, models_dir=h['models_dir'], video_format=vf, dialect=dialect)} "
               f"--fflf-preflight")
@@ -1223,21 +1252,34 @@ def extract_frame(v, frame, dst, timeout=120):
         raise RuntimeError("ffmpeg: " + (r.stderr[-200:] or "no output"))
     return n
 
-def resolve_chain(con, job):
+def resolve_chain(con, job, dialect=None):
     """Chain continuation: if the job has `chain` set (target slot), extract the
     last frame of the most recent finished generation and attach it to that
     slot. Jobs carrying a `batch` label look for the previous finished job
     *within that batch* only; unbatched jobs keep the global scope. Returns a
     note (also when skipped/omitted), or None. Never fails the job: a missing
-    source or an extract error just runs without the frame."""
+    source or an extract error just runs without the frame.
+
+    Idea 8 rules: an explicit first-frame target always wins over the chain
+    (the frame is omitted, with a note). And when the job carries a last-frame
+    target while the chain slot is the default `image`, the frame upgrades to
+    the first-frame slot if the target dialect has it — the pair then runs as
+    a pinned first/last (fflf) render."""
     slot = job["chain"]
     if not slot:
         return None
-    flag = dict(FLAGMAP).get(slot)
+    assets = json.loads(job["assets"] or "[]")
+    have = {_FLAG_SEMANTIC.get(a.get("flag")) for a in assets}
+    if slot != "first_frame" and "first_frame" in have:
+        return "chain: skipped — explicit first-frame wins"
+    if slot == "image" and "last_frame" in have and dialect and \
+            dialect_has(dialect_spec(dialect), "first_frame"):
+        slot = "first_frame"
+    prepend = slot == "image_first"
+    flag = "--image" if prepend else dict(FLAGMAP).get(slot)
     if not flag:
         return "chain: unknown slot " + slot
-    assets = json.loads(job["assets"] or "[]")
-    if any(a.get("flag") == flag for a in assets):
+    if not prepend and any(a.get("flag") == flag for a in assets):
         return None                     # manual attachment wins; also requeue re-run
     if job["batch"]:
         prev = con.execute(
@@ -1262,7 +1304,11 @@ def resolve_chain(con, job):
         return f"chain: extract failed ({e}) — ran without start frame"
     dst = tmp.with_name(f"chain_{prev['id']}_f{n}.png")
     tmp.rename(dst)
-    assets.append({"flag": flag, "file": dst.name, "local": str(dst)})
+    entry = {"flag": flag, "file": dst.name, "local": str(dst)}
+    if prepend:
+        assets.insert(0, entry)         # continuity leads as --image #1
+    else:
+        assets.append(entry)
     set_job(con, job["id"], assets=json.dumps(assets))
     return f"chain: {slot} = last frame (f{n}) of {prev['id']}"
 
@@ -1669,6 +1715,600 @@ def _cmd_add_batch(c, con, a):
                   + (f"  [{it['note']}]" if it["note"] else ""))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+# --- add-batch-e1: multi-image audio batch (docs/expansion-of-this-idea.md Idea 8)
+
+E1_IMG_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+E1_ROLE = re.compile(r"^([a-z])(\d*)$")
+E1_SINGLE = {"f": "first", "m": "middle", "l": "last"}
+
+
+def _e1_target(tok):
+    """Sidecar role token -> (target, number) or None. Tokens are lowercase
+    single letters: i[<n>] ordered (bare `.i` = #1), f/m/l single slots,
+    k<idx> keyframe at a frame index (strength stays the engine default)."""
+    m = E1_ROLE.fullmatch(tok.lower())
+    if not m:
+        return None
+    r, n = m.group(1), m.group(2)
+    if r == "i":
+        return ("ordered", int(n) if n else 1)
+    if r == "k":
+        return ("keyframe", int(n)) if n else None
+    if r in E1_SINGLE and not n:
+        return (E1_SINGLE[r], None)
+    return None
+
+
+def _e1_attachments(seg_stem, segdir):
+    """(attachments, problems) for one segment. Read-only. Legacy bare
+    <stem>.png = ordered #1; role files are <stem>.<role>[<n>].<ext>."""
+    atts, problems = [], []
+    for p in sorted(segdir.iterdir()):
+        if not p.is_file() or p.suffix.lower() not in E1_IMG_EXTS:
+            continue
+        if not p.name.startswith(seg_stem + "."):
+            continue
+        parts = p.name[len(seg_stem) + 1:].split(".")
+        if len(parts) == 1:
+            # legacy same-stem image: the part IS the extension
+            atts.append({"file": p.name, "target": "ordered", "order": 1})
+            continue
+        if len(parts) != 2:
+            problems.append(f"{p.name}: unknown role suffix (use .i/.iN/.f/.m/.l/.kNN)")
+            continue
+        t = _e1_target(parts[0])
+        if t is None:
+            problems.append(f"{p.name}: unknown role suffix {parts[0]!r}")
+            continue
+        target, num = t
+        att = {"file": p.name, "target": target}
+        if target == "ordered":
+            att["order"] = num
+        elif target == "keyframe":
+            att["index"] = num
+        atts.append(att)
+    return atts, problems
+
+
+def _e1_layout(atts, problems):
+    """Ordered layout: ordered images by number, then first/middle/last, then
+    keyframes by index. Duplicates on a single slot or on one order number are
+    problems (the batch then refuses, like every other validation error)."""
+    ordered = sorted((a for a in atts if a["target"] == "ordered"),
+                     key=lambda a: a["order"])
+    seen = {}
+    for a in ordered:
+        if a["order"] in seen:
+            problems.append(f"{a['file']}: duplicate ordered position "
+                            f"{a['order']} (also {seen[a['order']]})")
+        else:
+            seen[a["order"]] = a["file"]
+    for t in ("first", "middle", "last"):
+        got = [a for a in atts if a["target"] == t]
+        if len(got) > 1:
+            problems.append(f"{got[0]['file']}: duplicate {t}-frame slot "
+                            f"(also {', '.join(x['file'] for x in got[1:])})")
+    kfs = sorted((a for a in atts if a["target"] == "keyframe"),
+                 key=lambda a: a["index"])
+    return ordered + [a for t in ("first", "middle", "last")
+                      for a in atts if a["target"] == t] + kfs
+
+
+def _e1_blank_views():
+    """Stable per-dialect compile shape for segments a plan never compiled
+    (validation failed first). The editor renders rows regardless of errors,
+    so every segment must always carry a `compile` object."""
+    return {"dtcustom": {"assets": [], "extra": [], "tiers": [],
+                         "errors": [], "caps": []},
+            "dtofficial": {"assets": [], "extra": [], "tiers": [],
+                           "errors": [], "caps": []}}
+
+
+def _e1_compile(seg, dialect):
+    """Compile one segment's attachments for a dialect.
+
+    Returns {assets: [(flag|None, path)], extra: [tokens], tiers: [...],
+    errors: [...], caps: set}. v1 keeps the flag/gate mechanics: named targets
+    the target dialect cannot express are reported steered/unsupported, never
+    silently translated.
+    """
+    atts = seg["attachments"]
+    segdir = Path(seg["dir"])
+    ordered = [a for a in atts if a["target"] == "ordered"]
+    first = [a for a in atts if a["target"] == "first"]
+    middle = [a for a in atts if a["target"] == "middle"]
+    last = [a for a in atts if a["target"] == "last"]
+    kfs = [a for a in atts if a["target"] == "keyframe"]
+    tiers, errors, assets, extra = [], [], [], []
+
+    def mark(a, tier, note=""):
+        tiers.append({"file": a["file"], "target": a["target"],
+                      "tier": tier, "note": note})
+
+    def path(name):
+        return str(segdir / name)
+
+    if dialect == "dtcustom":
+        if seg.get("continuity") and not seg.get("continuity_omitted") and ordered:
+            errors.append(f"{seg['name']}: continuity + an ordered image need "
+                          "a dtofficial host (dtcustom has a single --image)")
+        f_as_image = bool(first) and not last
+        if len(ordered) > 1:
+            errors.append(f"{seg['name']}: {len(ordered)} ordered images — "
+                          "dtcustom accepts at most one --image")
+            for a in ordered[1:]:
+                mark(a, "unsupported", "dtcustom: one positional image only")
+        if f_as_image and ordered:
+            errors.append(f"{seg['name']}: a first-frame compiled as --image "
+                          "collides with an ordered image (both want the "
+                          "single positional slot)")
+        pos = ordered[0] if ordered else (first[0] if f_as_image else None)
+        if pos:
+            assets.append(("--image", path(pos["file"])))
+            mark(pos, "exact", "--image (positional)")
+        if first and last:
+            assets.append(("--first-frame", path(first[0]["file"])))
+            mark(first[0], "exact", "--first-frame (pinned pair)")
+        if middle:
+            assets.append(("--middle-frame", path(middle[0]["file"])))
+            mark(middle[0], "exact", "--middle-frame")
+        if last:
+            assets.append(("--last-frame", path(last[0]["file"])))
+            mark(last[0], "exact", "--last-frame")
+        for a in kfs:
+            assets.append((None, path(a["file"])))
+            # the CLI takes the flag and its "file:index" value as two argv
+            # tokens — create_job appends extra verbatim, so split them here
+            extra += ["--keyframe", f"@{a['file']}@:{a['index']}"]
+            mark(a, "exact", f"--keyframe :{a['index']} (default strength)")
+    else:  # dtofficial — one ordered --image sequence; roles live in the prompt
+        cont = bool(seg.get("continuity") and not seg.get("continuity_omitted"))
+        seq = list(first) + list(ordered) + list(middle) + list(last) + kfs
+        anchored = bool(first or ordered or cont)
+        if not anchored:
+            for a in seq:
+                mark(a, "unsupported", "a lone --image would read as the start")
+            if seq:
+                errors.append(f"{seg['name']}: {seq[0]['target']}-frame needs "
+                              "an anchor (a first/ordered image or continuity) "
+                              "on dtofficial — a lone --image reads as the start")
+            seq = []
+        else:
+            if first:
+                mark(first[0], "exact", "--image #1 (primary/start)")
+            elif ordered:
+                mark(ordered[0], "exact", "--image #1 (primary/start)")
+            for a in (ordered if first else ordered[1:]):
+                mark(a, "exact", "--image reference (order kept)")
+            for a in middle:
+                mark(a, "steered", "prompt-carried role — sent as an ordered ref")
+            for a in last:
+                mark(a, "steered", "end frame steered via prompt — ordered ref")
+            for a in kfs:
+                mark(a, "steered", "prompt-carried keyframe — ordered ref")
+        for a in seq:
+            assets.append(("--image", path(a["file"])))
+
+    caps = set()
+    n_img = 0
+    for flag, _p in assets:
+        sem = _FLAG_SEMANTIC.get(flag)
+        if sem:
+            caps.add(sem)
+            if sem == "image":
+                n_img += 1
+    for t in extra:
+        sem = extra_semantic(t)
+        if sem:
+            caps.add(sem)
+    if n_img >= 2:
+        caps.add("multi_image")
+    if n_img >= 1 and seg.get("continuity") and not seg.get("continuity_omitted"):
+        caps.add("multi_image")     # the chain frame becomes another --image
+    if {"first_frame", "last_frame"} <= caps:
+        caps.add("fflf_preflight")
+    return {"assets": assets, "extra": extra, "tiers": tiers,
+            "errors": errors, "caps": caps}
+
+
+def _e1_edit_attachments(items, segdir, name, errors):
+    """Validate client-edited attachments for one segment (the editor's chips).
+    Files must be images that really sit in the segment dir; targets use the
+    same vocabulary as the suffixes. Layout/duplicate rules are applied by the
+    caller via _e1_layout."""
+    out = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            errors.append(f"{name}: attachment entry must be an object")
+            continue
+        fn = Path(str(it.get("file") or "")).name
+        p = segdir / fn
+        if not fn or p.suffix.lower() not in E1_IMG_EXTS or not p.is_file():
+            errors.append(f"{name}: attachment image not found: {it.get('file')!r}")
+            continue
+        target = it.get("target")
+        if target not in ("ordered", "first", "middle", "last", "keyframe"):
+            errors.append(f"{name}: bad attachment target {target!r}")
+            continue
+        att = {"file": fn, "target": target}
+        if target == "ordered":
+            try:
+                att["order"] = int(it.get("order") or 1)
+            except (TypeError, ValueError):
+                errors.append(f"{name}: bad ordered position for {fn}")
+                continue
+            if att["order"] < 1:
+                errors.append(f"{name}: ordered position must be >= 1 ({fn})")
+                continue
+        elif target == "keyframe":
+            try:
+                att["index"] = int(it.get("index") or 0)
+            except (TypeError, ValueError):
+                errors.append(f"{name}: bad keyframe index for {fn}")
+                continue
+            if att["index"] < 0:
+                errors.append(f"{name}: keyframe index must be >= 0 ({fn})")
+                continue
+        out.append(att)
+    return out
+
+
+def e1_plan(dirpath, a, c, con, edits=None):
+    """Parse + validate an Audio-batch-E1 plan (Idea 8). Read-only: no rows,
+    no uploads. `a` is the add-batch-e1 namespace; `con` serves the config
+    template fallback and the pinned host's dialect."""
+    segdir = Path(dirpath).expanduser()
+    plan = {"dir": str(segdir), "segments": [], "tray": [], "errors": [],
+            "warnings": [], "host": getattr(a, "host", None) or None,
+            "batch": None, "fps": None, "grid": None, "dialect": None,
+            "obj": None}
+    if ".." in a.model or a.model.startswith("/"):
+        plan["errors"].append("invalid --model: must be a model id, not a "
+                              "path with '..' or '/'")
+        return plan
+    if not segdir.is_dir():
+        plan["errors"].append(f"not a directory: {segdir}")
+        return plan
+    wavs = sorted((p for p in segdir.iterdir()
+                   if p.suffix.lower() == ".wav" and not p.name.startswith(".")),
+                  key=_natural_key)
+    if not wavs:
+        plan["errors"].append(f"no .wav segments in {segdir}")
+        return plan
+    dialect = None
+    if getattr(a, "host", None):
+        h = con.execute("SELECT * FROM hosts WHERE alias=?",
+                        (a.host,)).fetchone()
+        if not h:
+            plan["errors"].append(f"unknown host {a.host!r}")
+            return plan
+        dialect = dialect_of(c, h)
+        plan["dialect"] = dialect
+    if a.manifest:
+        man = _parse_audio_manifest(Path(a.manifest).expanduser())
+        if man is None:
+            plan["errors"].append(f"{a.manifest} does not carry a Frame "
+                                  "Length Manifest header")
+            return plan
+    else:
+        found = [(p, _parse_audio_manifest(p))
+                 for p in sorted(segdir.glob("*.txt"))]
+        found = [(p, m) for p, m in found if m]
+        if len(found) > 1:
+            plan["errors"].append(f"{len(found)} manifests in {segdir} — pass "
+                                  "--manifest explicitly")
+            return plan
+        man = found[0][1] if found else None
+        if found:
+            plan["manifest"] = found[0][0].name
+    try:
+        _cfg_text, obj = _load_cfg(c, con, a.model,
+                                   getattr(a, "config_file", None),
+                                   getattr(a, "config_json", None))
+    except SystemExit as e:
+        plan["errors"].append(str(e) or "config could not be loaded")
+        return plan
+    plan["obj"] = obj
+    step, base, min_n = grid = frame_grid(a.model)
+    grid_floor = step * min_n + base
+    plan["grid"] = [step, base, min_n]
+    tfps = obj.get("fps")
+    fps = float(tfps) if tfps else (float(man["fps"]) if man and man["fps"] else None)
+    plan["fps"] = fps
+    if man and man["fps"] and tfps and float(man["fps"]) != float(tfps):
+        plan["errors"].append(f"manifest fps {man['fps']} != template config "
+                              f"fps {tfps} — refusing (mismatched fps would "
+                              "silently mis-time every segment)")
+        return plan
+    if man:
+        if man["total"] is not None and man["total"] != len(wavs):
+            plan["errors"].append(f"manifest Total Segments ({man['total']}) "
+                                  f"!= wavs in dir ({len(wavs)})")
+        if set(man["per"]) != {p.name for p in wavs}:
+            plan["errors"].append("manifest file lines don't match the wavs "
+                                  "in the dir")
+        if man["raw"] and man["raw"] != list(man["per"].values()):
+            plan["errors"].append("Raw Frame Counts block != per-file frame counts")
+    for idx, p in enumerate(wavs):
+        seg = {"name": p.stem, "wav": str(p), "dir": str(segdir),
+               "frames": None, "fit": None, "note": "", "prompt": "",
+               "prompt_src": "", "cfg_file": None, "cfg_delta": None,
+               "attachments": [], "continuity": False,
+               "continuity_omitted": None,
+               "compile": _e1_blank_views()}
+        errors = plan["errors"]
+        if man:
+            src_frames = man["per"].get(p.name)
+            if src_frames is None:
+                errors.append(f"{p.name}: no manifest entry"); continue
+        else:
+            try:
+                dur = _wav_duration(p)
+            except (RuntimeError, ValueError) as e:
+                errors.append(f"{p.name}: {e}"); continue
+            if not fps:
+                errors.append(f"{p.name}: no manifest and no fps (template "
+                              "config or manifest header) — cannot derive "
+                              "a frame count"); continue
+            src_frames = round(dur * fps)
+            if src_frames < grid_floor:
+                errors.append(f"{p.name}: {dur:.2f}s is under the "
+                              f"{grid_floor}-frame minimum ({step}n+{base}) "
+                              f"at {fps:g} fps"); continue
+        frames, note, fit = src_frames, "", None
+        if src_frames % step != base:
+            if a.on_non_grid == "refuse":
+                errors.append(f"{p.name}: {src_frames} frames is "
+                              f"non-{step}n+{base} (--on-non-grid refuse)")
+                continue
+            frames = _snap_frames(src_frames, up=(a.on_non_grid == "round-up"),
+                                  grid=grid)
+            fit = "pad" if frames > src_frames else "trim"
+            note = (f"non-{step}n+{base} {src_frames} → {frames} frames "
+                    f"({abs(src_frames - frames) / fps:.2f}s "
+                    + ("padded" if fit == "pad" else "trimmed") + ")")
+        seg.update(frames=frames, fit=fit, note=note)
+        sidecar = segdir / (p.stem + ".txt")
+        if sidecar.exists():
+            seg["prompt"], seg["prompt_src"] = sidecar.read_text(), "sidecar"
+        elif getattr(a, "prompt_file", None):
+            seg["prompt"] = Path(a.prompt_file).read_text()
+            seg["prompt_src"] = "shared"
+        else:
+            errors.append(f"{p.name}: no {p.stem}.txt sidecar and no "
+                          "--prompt-file"); continue
+        if not seg["prompt"].strip():
+            errors.append(f"{p.name}: empty prompt ("
+                          + (sidecar.name if sidecar.exists() else "--prompt-file")
+                          + ")"); continue
+        cfg_cand = segdir / (p.stem + ".json")
+        if cfg_cand.exists():
+            try:
+                parsed = json.loads(cfg_cand.read_text())
+                if not isinstance(parsed, dict):
+                    errors.append(f"{cfg_cand.name}: JSON root must be an "
+                                  f"object {{...}}, got "
+                                  f"{type(parsed).__name__}")
+                else:
+                    seg["cfg_file"], seg["cfg_delta"] = cfg_cand.name, parsed
+                    for k in ("width", "height"):
+                        if parsed.get(k) and parsed[k] % 64:
+                            plan["warnings"].append(
+                                f"{cfg_cand.name}: {k}={parsed[k]} is not a "
+                                "multiple of 64")
+                    if man and man["fps"] and parsed.get("fps") and \
+                            float(man["fps"]) != float(parsed["fps"]):
+                        errors.append(f"{cfg_cand.name}: fps {parsed['fps']} "
+                                      f"!= manifest fps {man['fps']}")
+            except json.JSONDecodeError as e:
+                errors.append(f"{cfg_cand.name}: invalid JSON ({e})")
+        atts, problems = _e1_attachments(p.stem, segdir)
+        for pr in problems:
+            plan["tray"].append({"file": pr.split(":", 1)[0], "reason": pr})
+        edited = (edits or {}).get(p.stem) if isinstance(edits, dict) else None
+        if isinstance(edited, dict) and isinstance(edited.get("attachments"), list):
+            seg["attachments"] = _e1_edit_attachments(
+                edited["attachments"], segdir, p.stem, errors)
+            seg["continuity"] = bool(edited.get(
+                "continuity", bool(getattr(a, "chain", False)) and idx > 0))
+        else:
+            seg["attachments"] = atts
+            seg["continuity"] = bool(getattr(a, "chain", False)) and idx > 0
+        seg["attachments"] = _e1_layout(seg["attachments"], errors)
+        have_first = any(x["target"] == "first" for x in seg["attachments"])
+        if seg["continuity"] and have_first:
+            seg["continuity_omitted"] = "explicit first-frame wins"
+        plan["segments"].append(seg)
+    if man and man["orig"]:
+        default_batch = Path(man["orig"]).stem
+    else:
+        default_batch = segdir.name
+    plan["batch"] = _norm_batch(a.batch or default_batch)
+    if plan["errors"]:
+        return plan
+    for seg in plan["segments"]:
+        views = {d: _e1_compile(seg, d) for d in ("dtcustom", "dtofficial")}
+        seg["compile"] = {d: {"assets": [[f, p] for f, p in v["assets"]],
+                              "extra": v["extra"], "tiers": v["tiers"],
+                              "errors": v["errors"],
+                              "caps": sorted(v["caps"])}
+                          for d, v in views.items()}
+        if dialect:
+            v = views[dialect]
+            seg["queued"] = dialect
+            if v["errors"]:
+                plan["errors"].extend(v["errors"])
+                continue
+            miss = missing_caps(dialect_spec(dialect), v["caps"])
+            if miss:
+                plan["errors"].append(
+                    f"{seg['name']}: host '{a.host}' ({dialect}) cannot run "
+                    f"this segment — missing {', '.join(miss)}")
+        else:
+            dt, do = views["dtcustom"], views["dtofficial"]
+            if dt["errors"] and do["errors"]:
+                plan["errors"].extend(dt["errors"] + do["errors"])
+                continue
+            seg["queued"] = "dtcustom" if not dt["errors"] else "dtofficial"
+            if seg["queued"] == "dtcustom":
+                if do["errors"]:
+                    plan["warnings"].append(
+                        f"{seg['name']}: dtofficial cannot run this segment "
+                        f"({do['errors'][0]}) — routes to dtcustom")
+                else:
+                    miss = missing_caps(dialect_spec("dtofficial"), dt["caps"])
+                    if miss:
+                        plan["warnings"].append(
+                            f"{seg['name']}: dtofficial hosts cannot run this "
+                            f"segment (missing {', '.join(miss)}) — routes "
+                            "to dtcustom")
+            else:
+                plan["warnings"].append(
+                    f"{seg['name']}: dtcustom cannot run this segment "
+                    f"({'; '.join(dt['errors'])}) — routes to dtofficial")
+    return plan
+
+
+def _e1_print_plan(plan):
+    """Human plan for --dry-run: per-segment attachments, continuity state and
+    the compiled surface for both dialects (tiers = exact/steered/unsupported)."""
+    print(f"plan: {plan['dir']} — {len(plan['segments'])} segment(s) — "
+          f"batch '{plan['batch']}' — host {plan['host'] or 'auto'}")
+    if plan["fps"]:
+        step, base, min_n = plan["grid"]
+        print(f"fps {plan['fps']:g} · grid {step}n+{base} "
+              f"(floor {step * min_n + base})")
+    for i, seg in enumerate(plan["segments"], 1):
+        atts = ", ".join(
+            f"{a['file']}→{a['target']}"
+            + (f"#{a['order']}" if "order" in a else "")
+            + (f":{a['index']}" if "index" in a else "")
+            for a in seg["attachments"]) or "—"
+        if seg["continuity_omitted"]:
+            cont = "omitted — " + seg["continuity_omitted"]
+        else:
+            cont = "on" if seg["continuity"] else "off"
+        print(f"#{i} {seg['name']}  {seg['frames']} frames  "
+              f"[{seg['prompt_src']} prompt]"
+              + (f"  [config {seg['cfg_file']}]" if seg["cfg_file"] else "")
+              + (f"  [{seg['note']}]" if seg["note"] else ""))
+        print(f"   audio: {Path(seg['wav']).name} (--audio)")
+        print(f"   attachments: {atts}")
+        print(f"   continuity: {cont}")
+        for d in ("dtcustom", "dtofficial"):
+            v = seg["compile"][d]
+            parts = [(str(flag) + " " if flag else "") + Path(p).name
+                     for flag, p in v["assets"]] + v["extra"]
+            print(f"   {d:<10} → {' '.join(parts) or '—'}")
+            if v["tiers"]:
+                print("              tiers: " + ", ".join(
+                    f"{t['file']}={t['tier']}" for t in v["tiers"]))
+            if v["errors"]:
+                print(f"              ERR: {'; '.join(v['errors'])}")
+    if plan["tray"]:
+        print("not attached:")
+        for t in plan["tray"]:
+            print(f"   {t['reason']}")
+    for w in plan["warnings"]:
+        print("warn:", w)
+
+
+def e1_queue(plan, a, c, con):
+    """Queue the jobs of a validated E1 plan. Prints one line per job and
+    returns the job ids. Assumes plan['errors'] is empty."""
+    tmp = HERE / "jobs" / "_tmp" / ("batch_" + uuid.uuid4().hex[:8])
+    tmp.mkdir(parents=True, exist_ok=True)
+    print(f"queueing {len(plan['segments'])} job(s) as batch '{plan['batch']}'")
+    seed = getattr(a, "seed", None)
+    if seed is not None and seed < 0:
+        print(f"seed {seed} is not a valid engine seed — random per segment")
+        seed = None
+    seed_extra = ["--seed", str(seed)] if seed is not None else []
+    active_overlay, active_src = {}, None
+    jids = []
+    try:
+        for seg in plan["segments"]:
+            src = Path(seg["wav"])
+            if seg["fit"]:
+                try:
+                    src = _fit_wav(src, seg["frames"], plan["fps"],
+                                   tmp / src.name, seg["fit"])
+                except RuntimeError as e:
+                    print(f"ERROR: {seg['name']}: {e} — segment skipped",
+                          file=sys.stderr)
+                    continue
+            cfg_tag = ""
+            if seg["cfg_delta"] is not None:
+                active_overlay.update(seg["cfg_delta"])
+                active_src = seg["cfg_file"]
+                cfg_tag = f"  [config: {seg['cfg_file']}]"
+            elif active_src:
+                cfg_tag = f"  [config: from {active_src}]"
+            chosen = seg.get("queued") or plan["dialect"] or "dtcustom"
+            v = _e1_compile(seg, chosen)
+            job_cfg = dict(plan["obj"] or {})
+            if active_overlay:
+                job_cfg.update(active_overlay)
+            job_cfg["numFrames"] = seg["frames"]
+            assets = [("--audio", str(src))] + list(v["assets"])
+            extra = list(v["extra"]) + list(seed_extra)
+            job_fps = job_cfg.get("fps") or plan["fps"]
+            has_img = any(fl == "--image" for fl, _p in v["assets"])
+            chain_slot = None
+            if seg["continuity"] and not seg["continuity_omitted"]:
+                # continuity leads the ordered list on dtofficial compiles; a
+                # segment without any --image keeps the legacy single slot
+                chain_slot = "image_first" if has_img else "image"
+            jid = create_job(c, con, a.model, seg["prompt"],
+                             json.dumps(job_cfg, indent=2), assets, extra,
+                             host=getattr(a, "host", None),
+                             name=seg["name"],
+                             ext=getattr(a, "ext", None) or "mov",
+                             backend=getattr(a, "backend", None),
+                             batch=plan["batch"], chain=chain_slot,
+                             num_frames=seg["frames"], fps=job_fps)
+            jids.append(jid)
+            tags = []
+            if seg["attachments"]:
+                tags.append(f"{len(seg['attachments'])} attachment(s)")
+            if seg["continuity_omitted"]:
+                tags.append("continuity omitted — " + seg["continuity_omitted"])
+            elif seg["continuity"]:
+                tags.append("continuity on")
+            if v["extra"]:
+                tags.append("extra: " + " ".join(v["extra"]))
+            print(f"{jid}  {seg['name']}  {seg['frames']} frames"
+                  + ("  [" + "; ".join(tags) + "]" if tags else "") + cfg_tag)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return jids
+
+
+def cmd_add_batch_e1(a):
+    c, con = conf(), db(); sync_hosts(con)
+    try:
+        return _cmd_add_batch_e1(c, con, a)
+    finally:
+        con.close()
+
+
+def _cmd_add_batch_e1(c, con, a):
+    plan = e1_plan(a.dir, a, c, con)
+    if plan["errors"]:
+        for e in plan["errors"]:
+            print("ERROR:", e, file=sys.stderr)
+        sys.exit(f"batch refused: {len(plan['errors'])} problem(s) — "
+                 "nothing queued")
+    for t in plan["tray"]:
+        print("not attached:", t["reason"], file=sys.stderr)
+    for w in plan["warnings"]:
+        print("warn:", w, file=sys.stderr)
+    if getattr(a, "dry_run", False):
+        _e1_print_plan(plan)
+        return
+    e1_queue(plan, a, c, con)
+
 
 # --- LLM prompt-synthesis helper (docs/expansion-of-this-idea.md, "The LLM
 # helper stage"): one OpenAI-compatible client (Ollama :11434 / LM Studio
@@ -2703,7 +3343,7 @@ def cmd_flags(a):
     by_dialect, unions = {}, {}
     for h in rows:
         d = dialect_of(c, h)
-        cli = shlex.quote(dollar_home(cli_of(c, h)))
+        cli = cli_cmd(h, c)
         r = ssh(h["alias"], f"{cli} {dialect_spec(d)['generate_cmd']} --help",
                 timeout=60)
         # the USAGE header distinguishes real help from a stub that ignores
@@ -2799,7 +3439,7 @@ def _cmd_serve_start(con, c, a):
             f'kill "$(cat holder.pid 2>/dev/null)" 2>/dev/null; true; '
             f'kill "$(cat worker.pid 2>/dev/null)" 2>/dev/null; true; '
             f"mv worker.log worker.log.prev 2>/dev/null; "
-            f"nohup {shlex.quote(dollar_home(cli_of(c, h)).replace('$HOME', h['home'], 1))} serve "
+            f"nohup {cli_cmd(h, c)} serve "
             f"< fifo >> worker.log 2>&1 & echo $! > worker.pid; "
             f"nohup sleep 100000 > fifo 2>/dev/null & echo $! > holder.pid")
     r = ssh(a.alias, boot, timeout=30)
@@ -2899,6 +3539,28 @@ def main():
                         "(the chain anchor); overrides a same-named sidecar image. "
                         "Same-named <stem>.png/jpg/jpeg/webp files next to the wavs "
                         "are always picked up as per-segment --image")
+    g = sp.add_parser("add-batch-e1", help="multi-image audio-segment batch "
+                                        "(Idea 8): role-suffixed sidecar images "
+                                        "(.i/.iN/.f/.m/.l/.kNN), compiled per "
+                                        "dialect; --dry-run only plans")
+    g.add_argument("dir")
+    g.add_argument("--model", required=True)
+    g.add_argument("--prompt-file")
+    g.add_argument("--config-file"); g.add_argument("--config-json")
+    g.add_argument("--host"); g.add_argument("--seed", type=int)
+    g.add_argument("--ext", default="mov", choices=["mov", "mp4", "png"])
+    g.add_argument("--backend", choices=["oneshot", "serve"])
+    g.add_argument("--batch")
+    g.add_argument("--manifest")
+    g.add_argument("--on-non-grid", choices=["round-up", "round-down", "refuse"],
+                   default="round-up")
+    g.add_argument("--chain", action="store_true",
+                   help="visual continuity: segments 2..N start from the "
+                        "previous segment's last frame; an explicit first-frame "
+                        "target wins and the chain frame is omitted (noted)")
+    g.add_argument("--dry-run", action="store_true",
+                   help="print the plan (attachments, continuity, compiled "
+                        "flags for both dialects) and exit — nothing queues")
     g = sp.add_parser("add-pairs", help="queue one job per consecutive still pair "
                                         "in a directory (keyframe interpolation: "
                                         "first frame → last frame)")
@@ -2957,7 +3619,8 @@ def main():
     g = sp.add_parser("serve-stop"); g.add_argument("alias")
     g.add_argument("--force", action="store_true")
     args = p.parse_args()
-    {"add": cmd_add, "add-batch": cmd_add_batch, "add-pairs": cmd_add_pairs,
+    {"add": cmd_add, "add-batch": cmd_add_batch,
+    "add-batch-e1": cmd_add_batch_e1, "add-pairs": cmd_add_pairs,
      "ls": cmd_ls, "run": cmd_run,
      "cancel": cmd_cancel,
      "regen": cmd_regen, "probe": cmd_probe, "reconcile": cmd_reconcile,
