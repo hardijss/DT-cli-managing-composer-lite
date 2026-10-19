@@ -532,11 +532,18 @@ improve the personal workflow.
 
 ## Idea 8 — Audio batch E1: multi-image attachment & dialect-aware compilation
 
-**Status: spec draft — planning review (2026-10-13); nothing built yet.** A
-cloned successor of the basic audio-batch panel (Idea 1's UI), adding
-multi-image attachment with per-image role targets and dialect-aware
-compilation. The basic panel and `add-batch` / `/api/add-batch` stay
-untouched; E1 lands in the `/next` dashboard first as a new "Audio E1" tab.
+**Status: Done (v1)** — shipped as `ltxq add-batch-e1 <dir>` (+ `--dry-run`)
+and the `/next` "Audio E1" tab (`/api/add-batch-e1/*`, 2026-10-17): sidecar
+role suffixes (.i/.iN/.f/.m/.l/.kNN), per-dialect compilation (named slots on
+dtcustom vs ordered --image on dtofficial), a parse → edit → queue editor with
+a per-dialect compile preview, continuity with the first-frame-wins rule and
+the last-frame → pinned-pair upgrade, plus the `multi_image` capability and
+the `cli_cmd` `$HOME`-quoting fix. Steered roles (`.m`/`.l`/`.kNN`) are sent
+as ordered `--image` references on dtofficial — continuity leads as image #1;
+a lone reference still refuses. Not implemented: prompt rewriting for steered
+roles (adding `<Picture N>` addressing), keyframe strength syntax (engine
+default), a per-segment continuity inheritance UI (batch checkbox + per-row
+toggle only), and a manifest file input (B).
 
 ### The scenario
 
@@ -680,6 +687,172 @@ contract is testable without the UI (`test_e1*` alongside `test_pairs*`).
   composer's `minimax-h3-fl2va` directive machinery?
 - Retiring the basic panel once E1 reaches parity.
 - Per-segment chain default UX (inherit the batch checkbox vs explicit rows).
+
+---
+
+## Idea 9 — Portable batch export: validated asset package + launch script
+
+**Status: idea draft (2026-10-19) — planning only, nothing built.** After a
+batch validates in the Audio batch E1 editor, offer a second exit besides
+queueing: export a self-contained package — media, prompts, configs and a
+POSIX-sh launcher — that runs the engine CLI on whatever machine the folder is
+copied to, with no ltxq, no database and no ssh involved.
+
+### The scenario
+
+An E1 batch has been parsed and reviewed: segments, fitted audio, prompts,
+config overlays, image attachments with roles, continuity toggles — all
+validated. Sometimes the batch should not run through this queue at all:
+
+- the render box is offline / on another network, or ltxq isn't installed there;
+- the batch should be handed to a collaborator together with its inputs;
+- the exact commands should be reproducible later, outside the queue's state;
+- **there is no communication line to the render side that can be kept up,
+  monitored or trusted** — the package travels over whatever medium exists
+  (USB stick, file share, a link) and the outputs come back the same way.
+
+In all three cases what is wanted is the *validated output of the composer*,
+frozen into a portable bundle.
+
+### What the package contains
+
+```
+<batch>-<stamp>/
+  manifest.json          package format + tool version + batch/model summary;
+                         per job: frames, fps, prompt/config refs, attachment
+                         roles, the compiled argv, sha256 of every media file
+  README.txt             requirements, how to run, dialect/CLI notes, warnings
+  run.sh                 master launcher (POSIX sh — see below)
+  verify.sh              optional integrity check (shasum / sha256sum)
+  jobs/
+    0001-<segment>/
+      prompt.txt  config.json  audio.wav        (fitted to the frame grid)
+      <segment>.i.png …                          (role-named media as in E1)
+      runner.sh                                  (same shape ltxq runs: cd +
+                                                  CLI invocation, make_runner)
+    0002-<segment>/ …
+```
+
+Media covers exactly what the plan references — the **already-cut segment
+wavs** the composer receives (cutting/word extraction is an external pre-step,
+out of scope for Ideas 1–9), fitted to the frame grid at export (pad/trim
+applied), prompts, per-segment config JSONs (numFrames and the sticky overlay
+baked), and the attachment images with their roles recorded in the manifest.
+Checksums let the recipient prove the bundle survived copying. No credentials,
+hosts.yaml content or queue state is packaged.
+
+### The launcher
+
+`run.sh` is generated, not hand-written, and reuses the two pieces ltxq's
+oneshot dispatch already uses — `make_runner()` per job and the plan's
+compiled argv — so the package runs **the same commands** the queue would
+have launched:
+
+- POSIX sh, no python, no ltxq, no database, no network.
+- Single dialect per package, chosen when the batch is made (the same early
+  decision as model/ext/fps): every job's argv is compiled for that dialect
+  and the launcher takes exactly one engine binary (`--cli` / `$CLI`). An
+  auto-hosted session must pick the target dialect before exporting.
+- Sequential job loop with per-job logs; `--resume` skips jobs whose expected
+  output already exists. A chained job whose predecessor's output is missing
+  **fails with a clear message** rather than running without the start frame.
+  A summary and a non-zero exit code close the run.
+- Plain CLI invocation (no PTY): `use_pty` stays an ltxq-side runner detail; a
+  `--pty` flag can be added later if a target engine needs it.
+- `--merge` (optional): lossless ffmpeg concat of the per-job outputs in job
+  order (job dirs are numbered deterministically) into one `<batch>-assembled`
+  file — every per-segment output is kept as-is.
+- `--pack-outputs` (optional): bundle the outputs into `outputs.tar.gz` plus a
+  sha256 list and the run report, so the recipient can send one file back over
+  the same ad-hoc channel.
+- `--check` (no rendering): print the required engine CLI, model/LoRA file
+  names (from the baked configs) and ffmpeg availability, so the recipient can
+  confirm the box is ready before a long run.
+- Models must already be present on the target (engine default models dir or
+  `DRAWTHINGS_MODELS_DIR`); the package bakes `--offline` /
+  `--no-download-missing` so a missing model fails loudly instead of
+  downloading.
+- **Continuity** stays supported: each chained job's runner references a fixed
+  placeholder name (e.g. `chain_prev.png`, listed in the manifest's
+  `runtime_files` — never in the checksum set, and no fake zero-byte files are
+  shipped); between jobs the launcher extracts the previous output's last
+  frame with ffmpeg into that file — mirroring `extract_frame()` and the
+  FF-wins / `image_first` rules compiled into the argv. ffmpeg/ffprobe are
+  therefore required only for continuity (and `verify.sh`).
+- Nothing is written outside the package: outputs land beside each job's
+  `config.json` (`out.<ext>`), exactly the runner's working directory.
+
+### Handoff contract (offline, untrusted-by-default transport)
+
+Because the package is the *only* channel to the render side, it must stand
+alone and be checkable by the recipient without talking back:
+
+- **Validation is complete at export** — there is no queue afterwards to catch
+  a bad segment, so the export gate is the last line of defence (see below).
+- **Recipient prerequisites are explicit**: the engine CLI, its models
+  (manifest lists the model + LoRA file names), and ffmpeg/ffprobe only when
+  continuity, `--merge` or `verify.sh` are used. No ltxq, no python, no
+  network, no database.
+- **Integrity before execution**: `verify.sh` checks the sha256 manifest; this
+  is integrity, not authenticity (a detached signature could be added later if
+  packages start crossing trust boundaries regularly).
+- **Results are packable for return**: per-job logs + `run-report.json` always;
+  `--pack-outputs` bundles the outputs + checksums for hand-back. Exit code and
+  summary flag any failed segments.
+- **Nothing sensitive travels**: no credentials, hosts.yaml content, ssh
+  material, telemetry or callbacks.
+
+### Validation is the point
+
+Export re-runs the E1 planner on the stored session edits at export time —
+never on a cached plan: any error blocks the export (the same list the editor
+shows), warnings are copied into `README.txt` and `manifest.json`, and the
+sha256 manifest is computed from the files actually written. The button stays
+disabled while the editor shows errors, so "validated" means the same thing
+for queueing and for export.
+
+### API + UI sketch
+
+```
+POST /api/add-batch-e1/<sid>/export                build, return {name, path,
+                                                   url, bytes}
+GET  /api/add-batch-e1/<sid>/export/<name>.tar.gz  download
+```
+
+Packages build under `jobs/exports/e1_<sid>_<stamp>/` and are tarred to
+`<name>.tar.gz`; old exports are pruned like sessions. The E1 panel gets an
+"Export package" button next to "Queue batch" (same disabled-on-errors rule)
+and shows the download link plus the server path. A headless counterpart
+(`add-batch-e1 --export DIR`, nothing queued) reuses the same builder.
+
+### Decisions (locked 2026-10-19)
+
+- **Dialect is an early batch decision** (like model/ext/fps): the package is
+  single-dialect and the launcher takes one engine binary. Auto-hosted
+  sessions choose the target dialect before exporting.
+- **Media = the cut segment wavs** the composer already receives (the cutter
+  is an external pre-step, out of scope for Ideas 1–9), fitted to the grid at
+  export; originals are not packaged.
+- **Assembly is optional**: `run.sh --merge` lossless-concats the per-job
+  outputs in job order, keeping every per-segment file. The full
+  reassembly/replace flow (Idea 4) stays separate.
+- **Entry points: both** — an "Export package" button in the E1 panel (via the
+  session API) and a headless `add-batch-e1 --export DIR` sharing one builder;
+  export-only, never queues in the same invocation.
+- **Chain placeholders** live in the manifest's `runtime_files` and are
+  excluded from checksums (no fake zero-byte files).
+- **Resume with a missing predecessor output** fails that segment with a clear
+  message (accepting the stricter behaviour; revisit after real use).
+- **Plain CLI invocation** in exported runners (no PTY); `--pty` only if a
+  target engine proves to need it.
+
+### Still open
+
+- **Authenticity**: add an optional detached signature (minisign/GPG) to the
+  package? sha256 covers corruption, not origin; revisit if handoffs become
+  routine.
+- Build mode: packages are tens of MB; build synchronously first, move to a
+  background thread only if it becomes slow.
 
 ---
 
