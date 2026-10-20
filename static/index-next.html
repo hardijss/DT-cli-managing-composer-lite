@@ -321,7 +321,7 @@ a { color:var(--acc); text-decoration:none; }
         <div><label>Config JSON overlay</label><input id="bcfg" class="mono"
           placeholder='{"steps": 9} — optional'></div>
       </div>
-      <label style="margin-top:10px"><input type="checkbox" id="bchain" style="width:auto"> Visual
+      <label style="margin-top:10px"><input type="checkbox" id="bchain" style="width:auto" checked> Visual
         continuity — segments 2..N get the previous segment's last frame as
         <span class="mono">--image</span> (the batch then dispatches serially,
         on any number of hosts)</label>
@@ -371,7 +371,7 @@ a { color:var(--acc); text-decoration:none; }
       <div><label>Config JSON overlay</label><input id="e1cfg" class="mono" placeholder='{"steps": 9} — optional'></div>
       <div><label>Continuity default</label>
         <label style="display:flex;gap:6px;align-items:center;margin-top:6px;font-size:12px">
-          <input type="checkbox" id="e1chain" style="width:auto"> ⛓ start from previous last frame</label></div>
+          <input type="checkbox" id="e1chain" style="width:auto" checked> ⛓ start from previous last frame</label></div>
     </div>
     <div class="row" style="margin-top:10px">
       <button type="button" id="e1parse">Parse folder</button>
