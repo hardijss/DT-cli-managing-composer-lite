@@ -32,7 +32,12 @@ NEXT_ONLY_IDS = {"panel-single", "panel-audio", "tab-single", "tab-audio",
                  "tab-audioe1", "panel-audioe1", "e1model", "e1host", "e1ext",
                  "e1dir", "e1folder", "e1prompt", "e1seed", "e1batch", "e1cfg",
                  "e1chain", "e1parse", "e1queue", "e1msg", "e1plan", "e1sum",
-                 "e1sid", "e1warnings", "e1rows", "e1tray"}
+                 "e1sid", "e1warnings", "e1rows", "e1tray",
+                 # interactive releases (Idea 10) — /next only
+                 "e1release", "tab-e1variant", "panel-e1variant", "evrid",
+                 "evresume", "evmsg", "evhead", "evstems", "evstemcard",
+                 "evcurname", "evseeds", "evgen", "evtiles", "evnext",
+                 "evabort", "evstatus"}
 
 # A string that marks a feature both dashboards must expose.
 FEATURE_MARKERS = (
@@ -59,6 +64,7 @@ FEATURE_MARKERS = (
     "run-first",                                    # history run grouping: boundary
     'data-run="',                                   # ...and its hover/tint group key
     "total_gen_s",                                  # history time column: actual generation time
+    'data-vg="',                                    # history variant groups (Idea 10)
 )
 
 ID_RE = re.compile(r'id="([^"]+)"')

@@ -88,6 +88,12 @@
   inputs; edits autosave via `PUT /api/add-batch-e1/<sid>/manifest` and the
   panel shows a per-dialect compile preview (exact / steered / unsupported)
   before queueing. The basic audio-batch panel is untouched.
+- **E1 Variant panel** (`/next` tab, Idea 10): semi-interactive release over a
+  validated E1 batch — one stem at a time, an explicit seed list per stem,
+  serial variant jobs (optional per-variant prompt/config overrides), inline
+  video review, 0–5 ratings, "use this variant", then "go and process next".
+  The pick feeds the next stem's continuity (`chain_src`); History groups
+  variant rows behind sub-strips with ★ on the picked one.
 - **Pairs batch panel**: parse a stills folder (drop/pick or a server-side
   path) into an editable pair sequence — the pair list is the editable truth
   (reorder ↑/↓, delete with a seam warning, append-and-move inserts, assign

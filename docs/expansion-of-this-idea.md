@@ -858,12 +858,19 @@ and shows the download link plus the server path. A headless counterpart
 
 ## Idea 10 — Audio batch E1_variant: semi-interactive variant approval
 
-**Status: idea draft (2026-10-20) — planning only, nothing built.** An
-interactive sibling of Idea 8's E1 panel: the batch is composed and validated
-exactly as today, but "release for generation" walks the stems one at a time,
-generating **variant sets** per stem and waiting for a human pick before moving
-on. With `auto continue` on it degrades to the classic E1 behaviour — the
-long-term goal is one panel with two modes, replacing the separate E1 tab.
+**Status: Done (v1, 2026-10-20)** — shipped as the `/next` "E1 Variant" tab
+with `/api/e1/release/*` and `ltxq.release_*` (schema: `vg`/`rseg`/`pick`/
+`rating`/`release`/`chain_src` + a `releases` table; inputs frozen under
+`jobs/_releases/<rid>/`). Compose still happens in the Audio E1 tab, which
+gains a single "Release interactive…" button; auto mode stays classic E1
+queueing, so the E1 tab can be retired once parity is validated in real use.
+Not implemented: the Idea 11 reprocess waterfall and the seed conveniences
+(both deferred there). An interactive sibling of Idea 8's E1 panel: the batch
+is composed and validated exactly as today, but "release for generation"
+walks the stems one at a time, generating **variant sets** per stem and
+waiting for a human pick before moving on. With `auto continue` on it
+degrades to the classic E1 behaviour — the long-term goal is one panel with
+two modes, replacing the separate E1 tab.
 
 ### The scenario
 
@@ -982,7 +989,9 @@ POST /api/e1/release/<rid>/abort | /finish
 ### Decisions (locked 2026-10-20)
 
 - **Variant axis = explicit seeds**: a text field of exact seed numbers; each
-  entry is one variant (good seeds deliberately re-used).
+  entry is one variant (good seeds deliberately re-used). Seed conveniences —
+  the "append N random seeds" helper and the seed book — are deferred to
+  Idea 11; v1 accepts exact numbers only.
 - **Rating = 0–5 numeric** (0 = reject, 5 = good); the **pick** ("use this
   variant") is a separate explicit choice per stem.
 - **Auto mode = one variant per stem** — exactly current E1 behaviour; once
@@ -996,11 +1005,6 @@ POST /api/e1/release/<rid>/abort | /finish
   concurrent branching (simplest state machine and review loop).
 - **Variant dimensions**: seed list + per-variant **prompt** and **config**
   overrides, editable per variant row; no matrix generation.
-
-### Still open
-
-- **Seed convenience**: an "append N random seeds" helper (explicit seed
-  numbers stay the primary path). The *seed book* is deferred — see Idea 11.
 
 ---
 
@@ -1027,8 +1031,9 @@ What the elaboration will have to settle:
   mutates the current release in place;
 - fate of superseded outputs: keep untouched, or auto-rate 0 ("rejected")?
 - interaction with Idea 9 exports: an export taken before a reprocess is stale;
-- a *seed book* (good seeds with short notes, one click to add to a variant
-  row) — moved here from Idea 10 for now;
+- seed conveniences moved here from Idea 10: an "append N random seeds"
+  helper and a *seed book* (good seeds with short notes, one click to add to a
+  variant row);
 - cursor/state rebuild after a reprocess (release resumes at the selected
   stem, downstream regenerated in order).
 

@@ -2,6 +2,38 @@
 
 All notable changes, bug fixes, and feature additions to `ltxq` are documented here.
 
+## [Unreleased] - 2026-10-20
+
+### Feature: Audio batch E1_variant — semi-interactive variant approval
+
+- **`ltxq.py`**: interactive release controller (Idea 10) over a validated E1
+  plan. New `jobs` columns (`vg`, `rseg`, `pick`, `rating`, `release`,
+  `chain_src`) and a `releases` table (additive migrations). A release walks
+  stems one at a time; variants are queued serially (exactly one live variant
+  per release) from an explicit seed list per stem, with optional per-variant
+  prompt/config overrides. Ratings are 0–5 (0 = reject); exactly one variant
+  per stem is picked, and the pick feeds the next stem's chain (`chain_src`),
+  so continuity follows the choice instead of "latest finished". Release
+  inputs are copied into `jobs/_releases/<rid>/` at creation, so discarding
+  the E1 staging session cannot break a running release. Auto mode remains
+  classic E1 (one job per stem). `resolve_chain()` honours `chain_src` and
+  reports an unavailable source instead of silently running without a frame.
+- **`server.py`**: `/api/e1/release` (+ `<rid>`, `segments/<n>/variants`,
+  `pick`, `rate`, `next`, `abort`, `tick`) — create from an E1 session
+  (interactive, or `mode=auto` for classic-queue parity), read state, drive
+  the review loop; a daemon ticker in `run_ui` advances serial scheduling
+  every 2 s.
+- **`static/index-next.html`** + **`static/index.html`**: new "E1 Variant"
+  tab next to E1 (release header, stem list, seed list input, variant tiles
+  with inline video, rating 0–5, "use this variant", "go and process next",
+  abort); the E1 panel gains one "Release interactive…" button. History
+  groups variant rows behind `↳ variant group` sub-strips in both dashboards,
+  with ★ on the picked row and its rating.
+- **`tests/`**: `test_release.py` (7) and `test_release_api.py` (3);
+  NEXT_ONLY_IDS + the `data-vg=` feature marker.
+- Verified: full unittest suite green (173 tests); `node --check` clean on
+  both dashboards.
+
 ## [Unreleased] - 2026-10-17
 
 ### Feature: Audio batch E1 — multi-image attachment with dialect-aware compilation

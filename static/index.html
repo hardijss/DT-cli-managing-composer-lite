@@ -60,6 +60,8 @@ tr.strip svg { margin-right:5px; vertical-align:-2px; }
 tr.strip .sep { margin:0 6px; opacity:.55; }
 tr.hl td { background:var(--tint-hl); }
 tr.strip.hl td { background:#1f262f; }
+tr.vgstrip td { background:#171c23; color:var(--dim); font-size:11px;
+                letter-spacing:0; text-transform:none; }
 form .grid { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
 #flash { position:fixed; right:16px; top:16px; z-index:5; display:none;
          max-width:420px; }
@@ -650,7 +652,15 @@ function render(d) {
       const t1 = hhmm(run.rows[0].created_at);
       histHtml += `<tr class="strip" data-run="${histRun}"><td colspan="8">${ICONS.box} ${esc(run.batch)}<span class="sep">·</span>${run.rows.length} job${run.rows.length > 1 ? "s" : ""}<span class="sep">·</span>${t0 === t1 ? t0 : t0 + " – " + t1}</td></tr>`;
     }
+    let prevVg = null;
     histHtml += run.rows.map((j, k) => {
+      let vgHtml = "";
+      if (j.vg && j.vg !== prevVg) {
+        const sameVg = run.rows.filter(x => x.vg === j.vg);
+        const picked = sameVg.find(x => x.pick);
+        vgHtml = `<tr class="strip vgstrip" data-vg="${esc(j.vg)}"><td colspan="8">↳ variant group<span class="sep">·</span>${sameVg.length} variant${sameVg.length > 1 ? "s" : ""}<span class="sep">·</span>${esc(j.name)}${picked ? `<span class="sep">·</span>★ picked ${esc(picked.id)}` : ""}</td></tr>`;
+      }
+      prevVg = j.vg || null;
       const assets = (() => { try { return JSON.parse(j.assets || "[]"); }
                               catch (e) { return []; } })();
       const inputs = assets.length
@@ -672,9 +682,9 @@ function render(d) {
       const cls = [batched && k === 0 ? "run-first" : "",
                    batched && histRun % 2 === 0 ? "run-alt" : ""]
                   .filter(Boolean).join(" ");
-      return `<tr${cls ? ` class="${cls}"` : ""}${batched ? ` data-run="${histRun}"` : ""}>
+      return vgHtml + `<tr${cls ? ` class="${cls}"` : ""}${batched ? ` data-run="${histRun}"` : ""}>
       <td class="mono">${esc(j.id)}</td>
-      <td>${j.chain ? `<span class="badge" title="continuation: last frame of the previous generation attached as ${esc(j.chain)}">${ICONS.chain}</span> ` : ""}${j.batch ? `<span class="badge" title="batch group">${ICONS.box}</span> ` : ""}${esc(j.name)}${inputs}</td>
+      <td>${j.chain ? `<span class="badge" title="continuation: last frame of the previous generation attached as ${esc(j.chain)}">${ICONS.chain}</span> ` : ""}${j.batch ? `<span class="badge" title="batch group">${ICONS.box}</span> ` : ""}${j.pick ? '<span class="badge done" title="picked variant">★</span> ' : ""}${esc(j.name)}${j.rating !== null && j.rating !== undefined ? ` <span class="sub">r${j.rating}</span>` : ""}${inputs}</td>
       <td><span class="badge ${esc(j.status)}">${esc(j.status)}</span></td>
       <td>${esc(j.backend||"-")}</td>
       <td>${j.pct}%</td>${j.total_gen_s

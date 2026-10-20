@@ -1008,6 +1008,155 @@ def api_e1_discard(sid):
     return flask.jsonify(ok=True)
 
 
+# --- interactive releases (Idea 10: E1_variant) ----------------------------
+# A release walks the stems of a validated E1 batch one at a time. Variant jobs
+# are created serially by ltxq.release_tick() (daemon ticker in run_ui); this
+# API exposes create/read/variants/pick/rate/next/abort.
+
+@app.post("/api/e1/release")
+def api_release_create():
+    """mode=interactive: create a release over the E1 session's validated plan.
+    mode=auto: classic E1 queueing (one job per stem) — parity path."""
+    body = flask.request.get_json(silent=True) or flask.request.form
+    sid = (body.get("sid") or "").strip()
+    mode = (body.get("mode") or "interactive").strip()
+    if mode not in ("interactive", "auto"):
+        return flask.jsonify(error="mode must be interactive|auto"), 400
+    if not _e1_sid_ok(sid):
+        return flask.jsonify(error="no such E1 session"), 404
+    staging = _e1_dir(sid)
+    manifest = json.loads((staging / "manifest.json").read_text())
+    c, con = ltxq.conf(), ltxq.db()
+    try:
+        ns = _e1_namespace(manifest, staging)
+        plan = ltxq.e1_plan(manifest["dir"], ns, c, con,
+                            edits=manifest.get("edits") or None)
+        if plan["errors"]:
+            shown = "; ".join(plan["errors"][:8])
+            return flask.jsonify(error=shown), 400
+        opts = {"model": ns.model, "host": ns.host, "ext": ns.ext,
+                "backend": ns.backend, "seed": ns.seed}
+        if mode == "auto":
+            out, err = _capture(ltxq.e1_queue, plan, ns, c, con)
+            if err:
+                return flask.jsonify(error=err[-800:]), 400
+            jids = re.findall(r"^([0-9a-f]{10})\s", out, re.M)
+            for jid in jids:
+                _publish_job(jid)
+            return flask.jsonify(mode="auto", jids=jids, report=out)
+        rid = ltxq.create_release(con, c, plan, opts, "interactive")
+        return flask.jsonify(**ltxq.release_summary(con, rid))
+    finally:
+        con.close()
+
+
+@app.get("/api/e1/release/<rid>")
+def api_release_get(rid):
+    c, con = ltxq.conf(), ltxq.db()
+    try:
+        data = ltxq.release_summary(con, rid)
+        if not data:
+            return flask.jsonify(error="no such release"), 404
+        return flask.jsonify(**data)
+    finally:
+        con.close()
+
+
+@app.post("/api/e1/release/<rid>/segments/<int:n>/variants")
+def api_release_variants(rid, n):
+    body = flask.request.get_json(silent=True) or {}
+    seeds = body.get("seeds")
+    if isinstance(seeds, str):
+        seeds = [t for t in re.split(r"[\s,;]+", seeds.strip()) if t]
+    if not isinstance(seeds, list):
+        return flask.jsonify(error="seeds must be a list"), 400
+    prompt = (body.get("prompt") or "").strip() or None
+    cfg = body.get("config")
+    if cfg is not None and not isinstance(cfg, dict):
+        return flask.jsonify(error="config must be an object"), 400
+    c, con = ltxq.conf(), ltxq.db()
+    try:
+        data = ltxq.release_variants(con, c, rid, n, seeds, prompt, cfg)
+        for stem in data["stems"]:
+            for v in stem["variants"]:
+                if v.get("jid"):
+                    _publish_job(v["jid"])
+        return flask.jsonify(**data)
+    except ValueError as e:
+        return flask.jsonify(error=str(e)), 400
+    finally:
+        con.close()
+
+
+@app.post("/api/e1/release/<rid>/segments/<int:n>/pick")
+def api_release_pick(rid, n):
+    body = flask.request.get_json(silent=True) or {}
+    jid = (body.get("jid") or "").strip()
+    if not jid:
+        return flask.jsonify(error="jid is required"), 400
+    c, con = ltxq.conf(), ltxq.db()
+    try:
+        return flask.jsonify(**ltxq.release_pick(con, c, rid, n, jid))
+    except ValueError as e:
+        return flask.jsonify(error=str(e)), 400
+    finally:
+        con.close()
+
+
+@app.post("/api/e1/release/<rid>/segments/<int:n>/rate")
+def api_release_rate(rid, n):
+    body = flask.request.get_json(silent=True) or {}
+    c, con = ltxq.conf(), ltxq.db()
+    try:
+        return flask.jsonify(**ltxq.release_rate(con, rid, body.get("jid"),
+                                                 body.get("rating")))
+    except ValueError as e:
+        return flask.jsonify(error=str(e)), 400
+    finally:
+        con.close()
+
+
+@app.post("/api/e1/release/<rid>/next")
+def api_release_next(rid):
+    c, con = ltxq.conf(), ltxq.db()
+    try:
+        return flask.jsonify(**ltxq.release_next(con, rid))
+    except ValueError as e:
+        return flask.jsonify(error=str(e)), 400
+    finally:
+        con.close()
+
+
+@app.post("/api/e1/release/<rid>/abort")
+def api_release_abort(rid):
+    c, con = ltxq.conf(), ltxq.db()
+    try:
+        return flask.jsonify(**ltxq.release_abort(con, rid))
+    except ValueError as e:
+        return flask.jsonify(error=str(e)), 400
+    finally:
+        con.close()
+
+
+@app.post("/api/e1/release/<rid>/tick")
+def api_release_tick(rid):
+    """Advance scheduling immediately (the daemon ticker does this every 2 s
+    under `ltxq ui`; tests use this to avoid sleeping)."""
+    c, con = ltxq.conf(), ltxq.db()
+    try:
+        ltxq.release_tick(con, c)
+        data = ltxq.release_summary(con, rid)
+        if not data:
+            return flask.jsonify(error="no such release"), 404
+        for stem in data["stems"]:
+            for v in stem["variants"]:
+                if v.get("jid"):
+                    _publish_job(v["jid"])
+        return flask.jsonify(**data)
+    finally:
+        con.close()
+
+
 # --- keyframe-pair batch (ltxq add-pairs; docs/expansion-of-this-idea.md Idea 2)
 # Two-phase: /preview stages a stills folder and plans the pair sequence (the
 # model-independent manifest, the editable truth), the dashboard edits it
@@ -2213,6 +2362,7 @@ def run_ui(a):
         if not lock:
             raise SystemExit("another engine is running (run or ui) — cannot start")
         threading.Thread(target=engine_loop, daemon=True).start()
+    threading.Thread(target=ltxq.release_loop, daemon=True).start()
     print(f"ui: http://127.0.0.1:{a.port}")
     app.run(host="127.0.0.1", port=a.port, threaded=True,
             use_reloader=False)
