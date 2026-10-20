@@ -1044,6 +1044,183 @@ sources.
 
 ---
 
+## Idea 12 — Durable compose state: resume prepared batches after browser close / reboot
+
+**Status: idea draft (2026-10-20) — planning only, nothing built.** A batch can
+take real effort to prepare — parse, attachments, seeds, half a release walked
+— and today a browser close or a reboot throws the *dashboard state* away even
+when the files are still on disk.
+
+### What survives today (inventory)
+
+- **E1 compose**: the session dir `jobs/_tmp/e1_<sid>/` (manifest + edits +
+  staged media) survives, but the dashboard keeps the sid **in memory only**
+  → a reload shows an empty panel; the session is orphaned until its 7-day GC.
+- **Classic audio batch and New-job**: form values and staged uploads have no
+  resume path at all.
+- **Pairs**: the sid lives in `localStorage`; another browser/profile loses it
+  even though the session dir remains.
+- **E1 Variant release**: the release (cursor, variants, picks) is in the DB
+  and safe, but the UI finds it only through `localStorage` rid — no "recent
+  releases" list if that is cleared.
+- **Reboot**: the DB + staging dirs survive; the engine re-queues `uploading`
+  jobs on start. It is purely the client-side state that is lost.
+
+### What "saved" should mean
+
+- **Saving is by intent.** Only the explicit **Save project** button writes
+  the slot (and shows "saved HH:MM"). Batches/panels that are not explicitly
+  saved keep today's volatile behaviour — a reload or crash discards them.
+  No background autosave, no silent overwrites.
+- **Server-side truth — one slot per panel = the panel's "current project"**.
+  Think of it like an editor's open workspace: one saved batch at a time per
+  panel. A slot is two things stored together: the *state* (form fields + the
+  plan snapshot the user was looking at) and the *asset directory* that
+  belongs to it. For `e1` and `pairs` that directory already exists (the
+  session dir collects the wavs, prompts, configs and images) — the draft
+  adopts and **pins** it instead of copying. Panels without a session dir
+  would get `jobs/_drafts/<panel>/` with the staged uploads copied in.
+  Starting a new parse replaces the slot (with a confirm), so "save" never
+  has to name anything — the slot *is* the current project.
+- **Restore = the exact state at the last save, not a re-derivation.** The
+  draft stores the plan/edits/UI state as they were, so a restore does not
+  re-parse changed files on disk and then drift. Referenced assets are
+  validated first; on any problem the restore returns explicit reasons
+  ("asset dir missing", "file X gone", "state version too new"), and the UI
+  shows them (a fields-only partial restore can be offered).
+- **UI restore on load**: each panel refills from its slot, shows "resumed
+  … HH:MM" with a **start new / discard** action.
+- **The draft pins its files**: session GC skips referenced dirs; discarding
+  a draft deletes only ltxq-owned staging, never a path the user typed.
+- **localStorage downgraded** to a fast-path pointer; the DB is authoritative
+  (localhost single-user → last write wins).
+
+### Design sketch
+
+- Table `drafts(panel TEXT PRIMARY KEY, updated_at INT, label TEXT,
+  state TEXT, files_dir TEXT)` (additive migration). One slot per panel; v1
+  panels: `e1`, `e1variant`, `pairs` (later: `newjob`, `audio`, with copied
+  `jobs/_drafts/<panel>/` asset dirs).
+- API: `GET /api/drafts` (all slots), `GET|PUT|DELETE /api/drafts/<panel>`,
+  `POST /api/drafts/<panel>/export` (streams the .zip) and
+  `POST /api/drafts/import` (multipart .zip → validate → fresh session dir →
+  register the slot). `state` is opaque JSON (schema-versioned); the server
+  validates only `files_dir` (ltxq-owned staging) and timestamps.
+- Per-panel payloads:
+  - `e1`: form fields + `sid` — restore re-fetches
+    `/api/add-batch-e1/<sid>` (plan, edits, images).
+  - `pairs`: fields + `sid` — restore re-fetches `/api/pairs/<sid>`.
+  - `audio` (later): fields + `dir` (staged dir or typed path) + start-image
+    name.
+  - `newjob` (later): fields + staged file refs; a small server option
+    accepts already-staged uploads instead of re-uploading.
+  - `e1variant`: `rid` + a new `GET /api/e1/release/recent` list, so the
+    release is recoverable even without any local pointer.
+- Save: the button writes the slot's `state` and adopts/pins its asset dir;
+  `updated_at` bumps and the panel shows "saved HH:MM". Nothing is written in
+  the background.
+- **No timers on saved work**: a draft and its asset dir live until the user
+  explicitly discards them. `_e1_gc` / `_pairs_gc` skip dirs referenced by a
+  draft (adopted dirs become effectively permanent). Time-based GC remains
+  only for never-saved, orphaned staging — nothing a draft points at.
+- Reboot behaviour: nothing extra server-side (DB + files persist). UI
+  restores slots; in-flight jobs keep today's semantics (queued resumes,
+  `uploading` re-queues). Running/collecting reconciliation stays out of
+  scope, noted as existing behaviour.
+- **Scope v1**: `e1`, `e1variant`, `pairs` — the compose surfaces that already
+  own a server-side session. Classic audio batch / New-job slots can follow
+  later with `jobs/_drafts/<panel>/`.
+- Small UX: a "resumed draft from HH:MM · discard" chip per panel; a shared
+  "recent work" strip can come later.
+
+### Portable save packages (.zip)
+
+Optional on save ("Save & download .zip") or later from the saved slot:
+produce a self-contained bundle that can be uploaded back here — or on another
+machine running ltxq — and reopened as the same project.
+
+```
+<panel>-<label>-<stamp>.zip
+  project.json        schema version, panel, created/updated, ltxq version,
+                      the exact state snapshot (form fields, plan/edits)
+  media/…             the session's asset files (wavs, prompts, configs,
+                      images) under their original basenames
+  checksums.sha256    every file in media/ + project.json
+```
+
+- **Import**: `POST /api/drafts/import` validates the checksum list, the state
+  schema and the archive paths (zip-slip safe: only plain relative names
+  under `media/`), unpacks into a fresh `jobs/_tmp/<panel>_<sid>/`, rewrites
+  the state's session paths, then registers the panel slot and returns a
+  restore report — the UI offers "Open imported project".
+- **Scope**: compose drafts (`e1`, `pairs`) in v1. An `e1variant` slot is
+  inherently server-side (releases live in the DB and reference generated
+  jobs); exporting a whole release tree is out of scope here — Idea 9's
+  export covers the runnable side.
+- **Sizes**: media can be tens to hundreds of MB; build and stream the zip on
+  demand (show its size); no background packaging in v1.
+- **Compatibility**: a newer `schema` than this ltxq refuses with a clear
+  reason; older versions are best-effort and report what could not restore.
+- **Relationship to Idea 9**: same mechanics, different payloads — Idea 12
+  zip = resumable *project* (state + inputs); Idea 9 = runnable *render
+  package* (compiled argv + launcher). Share the pack/verify helper and the
+  path-safety rules.
+
+### Edge cases
+
+- Draft references a session dir that already expired → show "draft expired"
+  and keep the form fields so the user can re-parse quickly.
+- Explicit discard → delete the slot + ltxq-owned staging dir; never a typed
+  path.
+- Two tabs on one slot → last write wins; optionally warn when `updated_at`
+  jumped.
+- Drafts are local-only (localhost): no prompts or media leave the machine.
+- Queueing does not clear a draft automatically — proposal: keep it until
+  "New" or discard, so a failed queue attempt can be retried with the same
+  prepared state.
+
+### Phasing (tentative)
+
+1. Table + endpoints + the E1 slot/restore (the biggest practical win).
+2. Pairs slot + the release pointer with a recent-releases list.
+3. Classic batch + New-job slots (fields + staged-file refs).
+4. GC pinning, discard UX, docs.
+
+### Decisions (locked 2026-10-20)
+
+- **One slot per panel** — the panel's current project; a new parse replaces
+  it after a confirm. Saving collects the state + the asset directory the
+  slot owns (session dir for e1/pairs, adopted and pinned; a copied
+  `jobs/_drafts/<panel>/` for future panels without one).
+- **Saving is by intent**: the explicit Save button is the only writer;
+  unsaved batches are discarded on reload (today's behaviour).
+- **Portable save**: a saved slot can be downloaded as a `.zip`
+  (state + media + checksums) and uploaded back later — import validates and
+  registers it as the panel's current project.
+- **UI**: one **Save** button plus a secondary **"Download .zip"** on the
+  saved slot (no separate "Save & download" flow).
+- **Import replaces the current slot** (after a confirm) — the intent is one
+  project at a time. A zip kept as a document is already the escape hatch if
+  multi-project ever surfaces; that is not planned now.
+- **Restore returns the exact saved state**; no silent re-derivation. If it
+  cannot fully restore, it must report the reasons (missing dir/file,
+  unsupported state version).
+- **Explicit delete only** — no expiry timers on saved drafts or their
+  assets. Orphaned, never-saved staging keeps the existing GC.
+- **Scope v1**: `e1`, `e1variant`, `pairs`.
+- Drafts survive across ltxq versions best-effort; the restore report says
+  when it could not.
+
+### Deferred (decide at implementation time)
+
+- **Orphaned staging GC**: keep the existing timer for never-saved sessions
+  (likely, since unsaved work is intentionally volatile) or disable GC
+  entirely — revisit when it matters.
+- Replace-slot confirmation wording ("start new draft — the current one will
+  be overwritten" vs keeping the old draft until the new save).
+
+---
+
 ## Candidate backlog (one-liners, to be expanded when picked up)
 
 - **Idea 3 — Built-in segmenter**: the producer side of Idea 1 — ffprobe/ffmpeg
