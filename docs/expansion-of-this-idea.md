@@ -856,6 +856,189 @@ and shows the download link plus the server path. A headless counterpart
 
 ---
 
+## Idea 10 — Audio batch E1_variant: semi-interactive variant approval
+
+**Status: idea draft (2026-10-20) — planning only, nothing built.** An
+interactive sibling of Idea 8's E1 panel: the batch is composed and validated
+exactly as today, but "release for generation" walks the stems one at a time,
+generating **variant sets** per stem and waiting for a human pick before moving
+on. With `auto continue` on it degrades to the classic E1 behaviour — the
+long-term goal is one panel with two modes, replacing the separate E1 tab.
+
+### The scenario
+
+Some generation inputs are quality-critical in ways validation cannot settle:
+the seed alone swings composition and content, and per-segment config tweaks
+(steps, cfg, LoRA mix, prompt overlay) are often judged only by looking at the
+result. Today the operator queues the whole batch, waits for everything, and
+re-queues individual segments by hand — losing both the "same inputs,
+different parameters" relationship and any record of which output was actually
+chosen for the final assembly.
+
+### The workflow
+
+1. **Compose** (E1): parse, attachments, continuity, compile preview —
+   unchanged.
+2. **Release**: choose mode (`interactive` | `auto continue`) and the stem's
+   **seed list** — a text field of exact seeds (comma/space separated; "good"
+   seeds are reused deliberately because seed choice swings quality). Each
+   entry becomes a variant row whose **prompt and config can be adjusted**
+   (the stem's values are the defaults). An "add N random" convenience may
+   append random seeds, but explicit numbers are the primary path. A release
+   session is created over the validated plan.
+3. **Per-stem loop** (interactive): the current stem's variant set is queued;
+   as each variant completes (SSE), its tile appears with its seed/config and
+   the output preview. The operator can:
+   - rate a variant **0–5 (0 = reject, 5 = good)** and mark exactly one as
+     **"use this variant"**;
+   - adjust seed/config and **re-issue** — new variants join the same group;
+   - generate **additional variants** of the same stem package;
+   - press **"go and process next"** once the stem is settled.
+4. The next stem's variants compile with the **picked variant as the
+   continuity source** (its extracted last frame feeds the chain frame), so
+   the walk respects the visual chain.
+5. `auto continue`: **exactly one variant per stem** (the explicit seed, or
+   the engine's random seed when none is given) — byte-for-byte the classic
+   E1 flow: all stems queued, chain resolves as today, no review stops. With
+   this mode proven, the E1 tab can be retired.
+
+### Variant sets and re-issue
+
+- A **variant group** = one stem's set of jobs generated from the same stem
+  package (same fitted wav, same images and roles) with one **explicit seed**
+  per variant plus optional **prompt and config overrides** — a variant may
+  need a different prompt, not only a different seed. Re-used "good" seeds are
+  first-class, not regenerated. Overrides live on the job itself (its prompt
+  and config text) — no extra schema needed.
+- **Re-issue** = a new job in the same group with an adjusted seed/config; it
+  reuses the stored assets exactly (the `regen` path already rebuilds jobs
+  from an existing one).
+- Continuity inside a variant set: every variant in a group chains from the
+  *picked* variant of the previous stem; variants never chain from a sibling
+  in the same group.
+
+### Data model (sketch)
+
+- `jobs` gains nullable columns: `vg` (variant-group id), `rseg` (release
+  segment index), `pick` (exactly one `1` per `vg`), `rating` (int 0–5:
+  0 = reject, 5 = good), `release` (release id). Additive migrations — old
+  jobs unaffected.
+- `releases` table: `id, created_at, batch, plan_json, mode, cursor, state` —
+  survives server restarts; the E1 session files stay the composer side.
+- `chain_src` (job id) on jobs: when set, `resolve_chain()` extracts the frame
+  from that exact job instead of "latest finished in the batch" — required so
+  variants chain from the pick, not from a random sibling.
+- Per-variant prompt/config overrides need no new columns: the variant *is* a
+  job, so its prompt/config text carries them.
+- History: extend the existing batch-run strips with variant-group sub-strips
+  (reuse the run-grouping renderer); the picked variant gets a badge, the
+  rating shows next to it.
+
+### UI sketch (E1_variant tab, `/next` first)
+
+- Left: stem list with per-stem state (compose → generating → review → done),
+  the current stem highlighted.
+- Center: variant tiles — inline `<video>`/thumbnail via `/api/view/<jid>`,
+  seed/config diffs, status badges, rating control (0–5), "use this variant".
+- Bottom: variant spec rows (seed list → one row per variant, each with
+  editable prompt/config), "generate more", "re-issue with changes", "go and
+  process next".
+- Switch: `auto continue` — hides the review loop (classic behaviour).
+- History: variant groups as described above; the picked variant is what
+  downstream chain / Idea 9 export references.
+
+### API sketch
+
+```
+POST /api/e1/release                       {sid, mode, variants:{k, seed_mode, configs[]}}
+GET  /api/e1/release/<rid>                 stems, variant groups, statuses, picks
+POST /api/e1/release/<rid>/segments/<n>/variants   queue K more variants
+POST /api/e1/release/<rid>/segments/<n>/pick       {jid}
+POST /api/e1/release/<rid>/segments/<n>/rate       {jid, rating}
+POST /api/e1/release/<rid>/next            advance to the next stem
+POST /api/e1/release/<rid>/abort | /finish
+```
+
+### Guardrails and edge cases
+
+- A pick change after downstream stems exist **invalidates** their chain
+  source. The policy — reprocessing from a selected stem, demoting downstream
+  stems to yet-to-generate — is deliberately deferred to **Idea 11**; Idea
+  10's model (per-stem pick + `chain_src`) is what makes it possible.
+- All variants of a stem failing must allow adjust-and-retry or an explicit
+  skip (with a note) — never a dead end.
+- Auto mode must be classic E1, byte for byte: one job per segment, same
+  argv, same History appearance apart from the variant grouping being trivial.
+- The release controller persists in the DB, not process memory (restart-safe).
+- Idea 9 export can later export the *picked* variants as the release manifest.
+
+### Phasing (tentative)
+
+1. Data model + release controller (queue one stem's variants, pick, next) + tests.
+2. Interactive UI in `/next` (variant tiles, SSE updates, controls).
+3. History variant grouping + picked/rating badges.
+4. `auto continue` parity, then retire/replace the E1 tab once proven.
+
+### Decisions (locked 2026-10-20)
+
+- **Variant axis = explicit seeds**: a text field of exact seed numbers; each
+  entry is one variant (good seeds deliberately re-used).
+- **Rating = 0–5 numeric** (0 = reject, 5 = good); the **pick** ("use this
+  variant") is a separate explicit choice per stem.
+- **Auto mode = one variant per stem** — exactly current E1 behaviour; once
+  parity is validated the E1 tab can be retired (E1_variant supplants it).
+- **Late pick changes / re-opening earlier stems = reprocess from the selected
+  stem** (downstream stems revert to yet-to-generate). Deferred to **Idea 11**
+  for elaboration; Idea 10 carries the data model it will need.
+- **Placement**: a separate `E1_variant` tab next to E1 in `/next`; E1 stays
+  untouched while Idea 10 proves itself, then it can be disabled/removed.
+- **Serial, single-lane variants**: one variant at a time per release — no
+  concurrent branching (simplest state machine and review loop).
+- **Variant dimensions**: seed list + per-variant **prompt** and **config**
+  overrides, editable per variant row; no matrix generation.
+
+### Still open
+
+- **Seed convenience**: an "append N random seeds" helper (explicit seed
+  numbers stay the primary path). The *seed book* is deferred — see Idea 11.
+
+---
+
+## Idea 11 — Reprocess from a selected stem (downstream waterfall)
+
+**Status: raw sketch (2026-10-20) — deliberately deferred; not a build target
+yet.** Idea 10 keeps one picked variant per stem and chains stem k+1 from stem
+k's pick. Changing an earlier pick — or deciding to re-run from an earlier
+stem — means everything after it was generated against a chain that no longer
+exists.
+
+Scenario: A → B → C → D generated and picked. The operator decides to
+regenerate starting from B. Then **C and D must be demoted to "yet-to-
+generate" stems**: their picks are cleared, their variant groups stay in
+History as superseded material, and the review loop restarts at B.
+
+What the elaboration will have to settle:
+
+- a "reprocess from here" action on a stem: downstream picks cleared, chain_src
+  references reset, downstream stems marked pending in the release state;
+- History rendering for superseded downstream generations (keep grouped vs
+  hidden; how to label them);
+- whether reprocessing **forks a new release** (A/B′ vs A/B/C/D history) or
+  mutates the current release in place;
+- fate of superseded outputs: keep untouched, or auto-rate 0 ("rejected")?
+- interaction with Idea 9 exports: an export taken before a reprocess is stale;
+- a *seed book* (good seeds with short notes, one click to add to a variant
+  row) — moved here from Idea 10 for now;
+- cursor/state rebuild after a reprocess (release resumes at the selected
+  stem, downstream regenerated in order).
+
+Open questions: cap on how far back one may reprocess; whether partial reuse
+(e.g. keep C's variant set as candidates for the new chain) is ever allowed —
+note that outputs from a different chain seed must never be used as chain
+sources.
+
+---
+
 ## Candidate backlog (one-liners, to be expanded when picked up)
 
 - **Idea 3 — Built-in segmenter**: the producer side of Idea 1 — ffprobe/ffmpeg
