@@ -2615,11 +2615,20 @@ def release_summary(con, rid):
                 "rating": row["rating"] if row else None,
                 "pick": bool(row and row["pick"]),
                 "done": bool(row and row["status"] == "done"),
+                "prompt_override": bool(d.get("prompt")),
+                "config_override": sorted(d["config"].keys())
+                                   if isinstance(d.get("config"), dict) else [],
                 "url": ("/api/view/" + d["jid"])
                        if row and row["status"] == "done" else None})
         stems.append({"name": plan["segments"][i]["name"],
                       "status": st.get("status"), "vg": st.get("vg"),
                       "variants": variants, "pick": st.get("pick")})
+    # Only the current stem's base values are needed (the override editor
+    # prefills from them); keeping the payload small matters for polling.
+    cur = rel["cursor"]
+    if 0 <= cur < len(stems):
+        stems[cur]["prompt"] = plan["segments"][cur]["prompt"]
+        stems[cur]["cfg"] = plan["segments"][cur]["cfg"]
     return {"rid": rel["id"], "batch": rel["batch"], "mode": rel["mode"],
             "cursor": rel["cursor"], "status": state.get("status", "active"),
             "stems": stems}

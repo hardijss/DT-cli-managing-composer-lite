@@ -393,7 +393,7 @@ a { color:var(--acc); text-decoration:none; }
   <div class="sub" style="margin:-4px 0 8px">semi-interactive release (Idea 10) —
     one stem at a time, a serial variant set per stem; rate 0–5, pick "use this
     variant", then go on. Compose in the Audio E1 tab, then "Release
-    interactive…"</div>
+    interactive…". For classic all-at-once runs use Audio E1 → Queue batch.</div>
   <div class="card">
     <div class="row">
       <div class="grow"><label>Release id</label>
@@ -410,7 +410,12 @@ a { color:var(--acc); text-decoration:none; }
     <div class="row" style="margin-top:6px">
       <div class="grow"><label>Seeds — one variant per number (comma/space separated)</label>
         <input id="evseeds" class="mono" placeholder="12345, 987654321, 42"></div>
-      <div><label>&nbsp;</label><br><button type="button" id="evgen">Generate variants</button></div>
+      <div><label>&nbsp;</label><br><button type="button" id="evgen">Prepare variants</button></div>
+    </div>
+    <div id="evdraft"></div>
+    <div class="row" style="margin-top:6px">
+      <button type="button" class="sec" id="evqbtn" disabled>Queue prepared variant(s)</button>
+      <button type="button" class="sec" id="evqclear" hidden>Clear prepared</button>
     </div>
     <div id="evtiles"></div>
     <div class="row" style="margin-top:10px">
@@ -1719,6 +1724,7 @@ $("e1release").onclick = async () => {
 // ---- interactive releases (Idea 10: E1_variant) ----
 let evRid = localStorage.getItem("ltxq.e1release") || "";
 let evData = null, evPollT = null, evStamp = null;
+let evDrafts = [];        // prepared variant rows: {seed, prompt, config}
 
 function evMsg(t, bad) {
   $("evmsg").textContent = t;
@@ -1747,22 +1753,101 @@ function evStartPoll() {
 
 $("evresume").onclick = () => {
   evMsg("");
+  evDrafts = [];
+  evRenderDrafts();
   evLoad($("evrid").value.trim())
     .then(evStartPoll)
     .catch(e => evMsg(e.message, true));
 };
 
-$("evgen").onclick = async () => {
+$("evgen").onclick = () => {
   if (!evRid || !evData) return evMsg("open a release first", true);
   const seeds = $("evseeds").value.split(/[\s,;]+/).filter(Boolean).map(Number);
   if (!seeds.length || seeds.some(n => !Number.isInteger(n)))
     return evMsg("seed list must contain integers", true);
+  const cur = evData.stems[evData.cursor] || {};
+  const basePrompt = cur.prompt || "";
+  const baseConfig = cur.cfg ? JSON.stringify(cur.cfg, null, 2) : "{}";
+  for (const sd of seeds)
+    evDrafts.push({seed: sd, prompt: basePrompt, config: baseConfig,
+                   basePrompt, baseConfig});
+  evRenderDrafts();
+  evMsg(`${evDrafts.length} variant row(s) prepared — edit overrides, then queue`);
+};
+
+function evRenderDrafts() {
+  $("evqbtn").disabled = !evDrafts.length;
+  $("evqclear").hidden = !evDrafts.length;
+  $("evqbtn").textContent = `Queue ${evDrafts.length} variant(s)`;
+  $("evdraft").innerHTML = evDrafts.map((d, i) => `
+    <div class="card" style="margin:6px 0;padding:8px" data-ev-draft="${i}">
+      <div class="row" style="gap:8px">
+        <b>seed ${d.seed}</b>
+        <span class="grow"></span>
+        <button type="button" class="danger" data-ev-ddel="${i}" title="remove">${ICONS.x}</button>
+      </div>
+      <details class="details" ${d.prompt !== d.basePrompt || d.config !== d.baseConfig ? "open" : ""}>
+        <summary>overrides — prompt / config (prefilled from the stem)</summary>
+        <label>Prompt — prefilled from the stem; edit to override this variant</label>
+        <textarea data-ev-dprompt="${i}" style="min-height:90px">${esc(d.prompt)}</textarea>
+        <label>Config — prefilled with the stem's effective config; edit to override</label>
+        <textarea data-ev-dconfig="${i}" class="mono" style="min-height:120px">${esc(d.config)}</textarea>
+      </details>
+    </div>`).join("");
+  $("evdraft").querySelectorAll("[data-ev-dprompt]").forEach(t => {
+    t.oninput = () => { evDrafts[+t.dataset.evDprompt].prompt = t.value; };
+  });
+  $("evdraft").querySelectorAll("[data-ev-dconfig]").forEach(t => {
+    t.oninput = () => { evDrafts[+t.dataset.evDconfig].config = t.value; };
+  });
+  $("evdraft").querySelectorAll("[data-ev-ddel]").forEach(b => {
+    b.onclick = () => { evDrafts.splice(+b.dataset.evDdel, 1); evRenderDrafts(); };
+  });
+}
+
+$("evqclear").onclick = () => {
+  evDrafts = [];
+  evRenderDrafts();
+  evMsg("prepared variants cleared");
+};
+
+$("evqbtn").onclick = async () => {
+  if (!evRid || !evData || !evDrafts.length) return;
+  let rows;
   try {
-    evData = await api(
-      `/api/e1/release/${evRid}/segments/${evData.cursor}/variants`,
-      {method:"POST", headers:{"Content-Type":"application/json"},
-       body: JSON.stringify({seeds})});
-    evRender();
+    rows = evDrafts.map(d => {
+      // Prefilled values are only SENT when actually changed, so an
+      // untouched row inherits the stem and shows no override badge.
+      const prompt = d.prompt !== d.basePrompt && d.prompt.trim()
+        ? d.prompt : undefined;
+      let cfg;
+      if (d.config.trim() && d.config.trim() !== d.baseConfig.trim()) {
+        try { cfg = JSON.parse(d.config); }
+        catch (err) { throw new Error(`seed ${d.seed}: config is not valid JSON`); }
+        if (!cfg || typeof cfg !== "object" || Array.isArray(cfg))
+          throw new Error(`seed ${d.seed}: config must be a JSON object`);
+      }
+      return {seed: d.seed, prompt, config: cfg};
+    });
+  } catch (err) { return evMsg(err.message, true); }
+  try {
+    let last = null;
+    for (const r of rows) {
+      const body = {seeds: [r.seed]};
+      if (r.prompt) body.prompt = r.prompt;
+      if (r.config) body.config = r.config;
+      last = await api(
+        `/api/e1/release/${evRid}/segments/${evData.cursor}/variants`,
+        {method:"POST", headers:{"Content-Type":"application/json"},
+         body: JSON.stringify(body)});
+    }
+    if (last) {
+      evData = last;
+      evStamp = JSON.stringify(last);
+      evRender();
+    }
+    evDrafts = [];
+    evRenderDrafts();
     evMsg("variants queued");
   } catch (e) { evMsg(e.message, true); }
 };
@@ -1770,6 +1855,8 @@ $("evgen").onclick = async () => {
 $("evnext").onclick = async () => {
   try {
     evData = await api(`/api/e1/release/${evRid}/next`, {method:"POST"});
+    evDrafts = [];
+    evRenderDrafts();
     evRender();
     evMsg("moved to next stem");
   } catch (e) { evMsg(e.message, true); }
@@ -1833,6 +1920,8 @@ function evRender() {
         <b>seed ${v.seed === null || v.seed === undefined ? "—" : v.seed}</b>
         <span class="badge ${badge}">${esc(v.status)}</span>
         ${v.rating !== null && v.rating !== undefined ? `<span class="sub">rating ${v.rating}</span>` : ""}
+        ${v.prompt_override ? '<span class="badge" title="prompt overridden for this variant">✎ prompt</span>' : ""}
+        ${v.config_override && v.config_override.length ? `<span class="badge" title="config keys: ${esc(v.config_override.join(", "))}">⚙ ${esc(v.config_override.join(", "))}</span>` : ""}
         ${v.pick ? '<span class="badge done">★ picked</span>' : ""}
         <span class="grow"></span>
         <button type="button" class="sec" data-ev-pick="${esc(v.jid || "")}"
@@ -1856,6 +1945,7 @@ function evRender() {
   });
 }
 
+evRenderDrafts();
 if (evRid) {
   $("evrid").value = evRid;
   $("evseeds").value = localStorage.getItem("ltxq.e1seeds") || "";

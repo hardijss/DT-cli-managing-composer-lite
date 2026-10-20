@@ -36,8 +36,8 @@ NEXT_ONLY_IDS = {"panel-single", "panel-audio", "tab-single", "tab-audio",
                  # interactive releases (Idea 10) — /next only
                  "e1release", "tab-e1variant", "panel-e1variant", "evrid",
                  "evresume", "evmsg", "evhead", "evstems", "evstemcard",
-                 "evcurname", "evseeds", "evgen", "evtiles", "evnext",
-                 "evabort", "evstatus"}
+                 "evcurname", "evseeds", "evgen", "evdraft", "evqbtn",
+                 "evqclear", "evtiles", "evnext", "evabort", "evstatus"}
 
 # A string that marks a feature both dashboards must expose.
 FEATURE_MARKERS = (

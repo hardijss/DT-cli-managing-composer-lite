@@ -34,6 +34,23 @@ All notable changes, bug fixes, and feature additions to `ltxq` are documented h
 - Verified: full unittest suite green (173 tests); `node --check` clean on
   both dashboards.
 
+### Feature: E1_variant per-variant prompt/config overrides
+
+- **`ltxq.py`**: release summaries expose `prompt_override` and
+  `config_override` per variant (values ride the job's own prompt/config text
+  — no schema change).
+- **`static/index-next.html`**: "Prepare variants" turns the seed list into
+  editable variant rows; each row can carry a prompt override and a JSON
+  config override before queueing. Both fields are **prefilled from the
+  stem** (prompt text + effective config) and only sent when actually
+  edited, so untouched rows inherit without false override badges. Rows are
+  queued one API call each (the serial single-lane behaviour is unchanged),
+  and variant tiles show ✎/⚙ badges when overrides were used.
+- **`tests/test_release_api.py`**: per-variant prompt/config overrides
+  verified end-to-end (job prompt/config files and the summary flags).
+- Verified: full unittest suite green (174 tests); `node --check` clean on
+  both dashboards.
+
 ## [Unreleased] - 2026-10-17
 
 ### Feature: Audio batch E1 — multi-image attachment with dialect-aware compilation

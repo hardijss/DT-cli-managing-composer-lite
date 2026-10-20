@@ -861,8 +861,9 @@ and shows the download link plus the server path. A headless counterpart
 **Status: Done (v1, 2026-10-20)** — shipped as the `/next` "E1 Variant" tab
 with `/api/e1/release/*` and `ltxq.release_*` (schema: `vg`/`rseg`/`pick`/
 `rating`/`release`/`chain_src` + a `releases` table; inputs frozen under
-`jobs/_releases/<rid>/`). Compose still happens in the Audio E1 tab, which
-gains a single "Release interactive…" button; auto mode stays classic E1
+`jobs/_releases/<rid>/`). Per-variant prompt/config overrides are editable in
+the prepare-rows step. Compose still happens in the Audio E1 tab, which gains
+a single "Release interactive…" button; auto mode stays classic E1
 queueing, so the E1 tab can be retired once parity is validated in real use.
 Not implemented: the Idea 11 reprocess waterfall and the seed conveniences
 (both deferred there). An interactive sibling of Idea 8's E1 panel: the batch

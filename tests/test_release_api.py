@@ -109,6 +109,11 @@ class ReleaseApiTests(ReleaseApiBase):
         self.assertEqual(rel["mode"], "interactive")
         self.assertEqual([s["status"] for s in rel["stems"]],
                          ["setup", "setup"])
+        # the current stem carries its prompt/config for the override prefill;
+        # other stems do not (payload stays small while polling)
+        self.assertEqual(rel["stems"][0]["prompt"], "prompt 1")
+        self.assertEqual(rel["stems"][0]["cfg"]["fps"], 25)
+        self.assertNotIn("prompt", rel["stems"][1])
         # variants: serial — exactly one job is created
         data = self.post(f"/api/e1/release/{rid}/segments/0/variants",
                          {"seeds": [11, 22]})
@@ -147,6 +152,39 @@ class ReleaseApiTests(ReleaseApiBase):
         self.assertEqual(row["rseg"], 1)
         self.assertEqual(row["chain_src"], jobs[0]["id"])
         self.assertEqual(row["chain"], "image")
+
+    def test_variant_prompt_and_config_overrides(self):
+        payload = self.preview(segdir("r4"))
+        rid = self.release(payload["sid"])["rid"]
+        # first variant: per-variant prompt + config override
+        self.post(f"/api/e1/release/{rid}/segments/0/variants",
+                  {"seeds": [101], "prompt": "override A",
+                   "config": {"steps": 7}})
+        j1 = self.jobs_for(rid)[0]
+        self.assertEqual(
+            (Path(j1["local_dir"]) / "prompt.txt").read_text(), "override A")
+        cfg1 = json.loads((Path(j1["local_dir"]) / "config.json").read_text())
+        self.assertEqual(cfg1["steps"], 7)
+        # second variant: defaults inherited from the stem
+        self.mark_done(j1["id"])
+        self.post(f"/api/e1/release/{rid}/tick")
+        self.post(f"/api/e1/release/{rid}/segments/0/variants",
+                  {"seeds": [102]})
+        jobs = self.jobs_for(rid)
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual(
+            (Path(jobs[1]["local_dir"]) / "prompt.txt").read_text(),
+            "prompt 1")
+        self.assertNotIn("steps",
+                         json.loads((Path(jobs[1]["local_dir"])
+                                     / "config.json").read_text()))
+        # the summary exposes the override flags for the tiles
+        data = self.post(f"/api/e1/release/{rid}/tick")
+        vs = {v["seed"]: v for stem in data["stems"] for v in stem["variants"]}
+        self.assertTrue(vs[101]["prompt_override"])
+        self.assertEqual(vs[101]["config_override"], ["steps"])
+        self.assertFalse(vs[102]["prompt_override"])
+        self.assertEqual(vs[102]["config_override"], [])
 
     def test_auto_mode_is_classic_queue(self):
         before = self.con.execute(
