@@ -2,6 +2,42 @@
 
 All notable changes, bug fixes, and feature additions to `ltxq` are documented here.
 
+## [Unreleased] - 2026-10-22
+
+### Feature: E1_variant per-variant attachments + optional notes (Idea 10 increment)
+
+- **`ltxq.py`**: releases freeze *every* image of each stem folder under
+  `jobs/_releases/<rid>/` (not just the attached ones) and summaries expose
+  the current stem's `images` palette. Variant defs gain optional
+  `attachments` and `note`; `release_variants()` validates them with the E1
+  chip validators (`_e1_edit_attachments` + `_e1_layout`), compiles a variant
+  copy against the release dialect, and rejects impossible layouts. Variant
+  jobs compile the override set and re-derive the chain slot / FF-wins rule
+  per variant (a variant with its own first frame gets no `chain_src`).
+  Additive `jobs.caps_override` + `jobs.variant_meta` columns; the dispatch
+  gate turns a capability refusal into a warning note for override jobs
+  (`next_dispatchable_job` no longer routes them away). `_e1_compile()` gains
+  `allow_multi=True`, which emits multiple dtcustom `--image` positionals
+  instead of collapsing them, so an override actually reaches a newer binary.
+- **`server.py`**: `variants` accepts `attachments` + `note`;
+  `POST /api/e1/release/<rid>/allow-unsupported` toggles the release-level
+  override; summaries carry `allow_unsupported`, per-variant `attachments` /
+  `attachment_override` / `note` / `warnings`, and the stem image palette.
+- **`static/index-next.html`**: each prepared variant row gets an attachment
+  editor (image + target dropdowns, ordered/keyframe positions, add / remove /
+  reset-to-stem) and a note field; only changed sets are sent, so untouched
+  rows inherit the stem with no false badge. Tiles show ✎ attachments, the
+  note, and a ⚠ warning count; the release card gains the "allow unsupported
+  (warn)" switch.
+- **`static/index.html`** + **`static/index-next.html`**: History rows render
+  `✎ att` / `note` / `⚠ N` badges from `variant_meta`.
+- **`tests/`**: `test_release.py` (12) and `test_release_api.py` (5) cover
+  palette copying, override validation, FF-wins per variant, note propagation,
+  the caps-override routing path, and the API switch; frontend guard gains
+  `evallow` + the `variant_meta` marker.
+- Verified: full unittest suite green (180 tests); `node --check` clean on
+  both dashboards.
+
 ## [Unreleased] - 2026-10-20
 
 ### Feature: Audio batch E1_variant — semi-interactive variant approval

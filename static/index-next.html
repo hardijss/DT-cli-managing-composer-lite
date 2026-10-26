@@ -402,6 +402,10 @@ a { color:var(--acc); text-decoration:none; }
       <span class="sub grow" id="evmsg"></span>
     </div>
     <div id="evhead" class="sub" style="margin-top:4px"></div>
+    <label style="display:flex;gap:6px;align-items:center;margin-top:8px;font-size:12px">
+      <input type="checkbox" id="evallow" style="width:auto">
+      allow unsupported targets for this release (warn only — the dialect
+      rulebook may lag the CLI binary)</label>
   </div>
   <div class="card" id="evstemcard" hidden>
     <div id="evstems"></div>
@@ -756,6 +760,19 @@ function render(d) {
   const hhmm = t => { const d = new Date((t || 0) * 1000);
     return String(d.getHours()).padStart(2, "0") + ":" +
            String(d.getMinutes()).padStart(2, "0"); };
+  const vmetaHtml = j => {
+    if (!j.variant_meta) return "";
+    let m; try { m = JSON.parse(j.variant_meta); } catch (e) { return ""; }
+    if (!m) return "";
+    const bits = [];
+    if (m.attachments_override)
+      bits.push('<span class="badge" title="variant uses its own attachment set">✎ att</span>');
+    if (m.note)
+      bits.push(`<span class="badge" title="${esc(m.note)}">note</span>`);
+    if (m.warnings && m.warnings.length)
+      bits.push(`<span class="badge" title="${esc(m.warnings.join(" · "))}">⚠ ${m.warnings.length}</span>`);
+    return bits.length ? bits.join(" ") + " " : "";
+  };
   let histHtml = "", histRun = -1;
   for (const run of histRuns) {
     const batched = !!run.batch;
@@ -797,7 +814,7 @@ function render(d) {
                   .filter(Boolean).join(" ");
       return vgHtml + `<tr${cls ? ` class="${cls}"` : ""}${batched ? ` data-run="${histRun}"` : ""}>
       <td class="mono">${esc(j.id)}</td>
-      <td>${j.chain ? `<span class="badge" title="continuation: last frame of the previous generation attached as ${esc(j.chain)}">${ICONS.chain}</span> ` : ""}${j.batch ? `<span class="badge" title="batch group">${ICONS.box}</span> ` : ""}${j.pick ? '<span class="badge done" title="picked variant">★</span> ' : ""}${esc(j.name)}${j.rating !== null && j.rating !== undefined ? ` <span class="sub">r${j.rating}</span>` : ""}${inputs}</td>
+      <td>${j.chain ? `<span class="badge" title="continuation: last frame of the previous generation attached as ${esc(j.chain)}">${ICONS.chain}</span> ` : ""}${j.batch ? `<span class="badge" title="batch group">${ICONS.box}</span> ` : ""}${j.pick ? '<span class="badge done" title="picked variant">★</span> ' : ""}${vmetaHtml(j)}${esc(j.name)}${j.rating !== null && j.rating !== undefined ? ` <span class="sub">r${j.rating}</span>` : ""}${inputs}</td>
       <td><span class="badge ${esc(j.status)}">${esc(j.status)}</span></td>
       <td>${esc(j.backend||"-")}</td>
       <td>${j.pct}%</td>${j.total_gen_s
@@ -1751,6 +1768,20 @@ function evStartPoll() {
   }, 2000);
 }
 
+$("evallow").onchange = async () => {
+  if (!evRid) return;
+  try {
+    evData = await api(`/api/e1/release/${evRid}/allow-unsupported`,
+      {method:"POST", headers:{"Content-Type":"application/json"},
+       body: JSON.stringify({on: $("evallow").checked})});
+    evStamp = JSON.stringify(evData);
+    evRender();
+    evMsg($("evallow").checked
+      ? "unsupported targets allowed — validation warns, dispatch proceeds"
+      : "unsupported targets are refused again");
+  } catch (e) { evMsg(e.message, true); }
+};
+
 $("evresume").onclick = () => {
   evMsg("");
   evDrafts = [];
@@ -1768,21 +1799,51 @@ $("evgen").onclick = () => {
   const cur = evData.stems[evData.cursor] || {};
   const basePrompt = cur.prompt || "";
   const baseConfig = cur.cfg ? JSON.stringify(cur.cfg, null, 2) : "{}";
+  const stemAtts = (cur.attachments || []).map(a => ({...a}));
+  const images = cur.images || [];
   for (const sd of seeds)
     evDrafts.push({seed: sd, prompt: basePrompt, config: baseConfig,
-                   basePrompt, baseConfig});
+                   basePrompt, baseConfig,
+                   atts: stemAtts.map(a => ({...a})),
+                   baseAtts: JSON.stringify(stemAtts),
+                   note: "", images});
   evRenderDrafts();
   evMsg(`${evDrafts.length} variant row(s) prepared — edit overrides, then queue`);
 };
+
+function evImageOpts(list, cur) {
+  const all = cur && !list.includes(cur) ? [...list, cur] : list;
+  return all.map(f =>
+    `<option value="${esc(f)}" ${f === cur ? "selected" : ""}>${esc(f)}</option>`).join("");
+}
+
+function evTargetOpts(t) {
+  return ["ordered", "first", "middle", "last", "keyframe"].map(x =>
+    `<option value="${x}" ${x === t ? "selected" : ""}>${x}</option>`).join("");
+}
 
 function evRenderDrafts() {
   $("evqbtn").disabled = !evDrafts.length;
   $("evqclear").hidden = !evDrafts.length;
   $("evqbtn").textContent = `Queue ${evDrafts.length} variant(s)`;
-  $("evdraft").innerHTML = evDrafts.map((d, i) => `
+  $("evdraft").innerHTML = evDrafts.map((d, i) => {
+    const dirty = JSON.stringify(d.atts) !== d.baseAtts;
+    const attRows = d.atts.map((a, j) => `
+      <div class="row" style="gap:6px;align-items:center;margin:4px 0">
+        <select data-ev-afile="${i}:${j}" title="image from this stem">${evImageOpts(d.images, a.file)}</select>
+        <select data-ev-atarget="${i}:${j}" title="attachment target">${evTargetOpts(a.target)}</select>
+        ${a.target === "ordered"
+          ? `<input type="number" min="1" value="${a.order || 1}" data-ev-aorder="${i}:${j}" style="width:64px" title="ordered position">`
+          : a.target === "keyframe"
+          ? `<input type="number" min="0" value="${a.index || 0}" data-ev-aindex="${i}:${j}" style="width:64px" title="keyframe index">`
+          : ""}
+        <button type="button" class="danger" data-ev-adel="${i}:${j}" style="padding:2px 6px" title="remove">${ICONS.x}</button>
+      </div>`).join("");
+    return `
     <div class="card" style="margin:6px 0;padding:8px" data-ev-draft="${i}">
       <div class="row" style="gap:8px">
         <b>seed ${d.seed}</b>
+        ${dirty ? '<span class="badge" title="this row changes the stem attachment set">✎ attachments</span>' : ""}
         <span class="grow"></span>
         <button type="button" class="danger" data-ev-ddel="${i}" title="remove">${ICONS.x}</button>
       </div>
@@ -1793,15 +1854,89 @@ function evRenderDrafts() {
         <label>Config — prefilled with the stem's effective config; edit to override</label>
         <textarea data-ev-dconfig="${i}" class="mono" style="min-height:120px">${esc(d.config)}</textarea>
       </details>
-    </div>`).join("");
+      <details class="details" ${dirty ? "open" : ""} ${d.images.length ? "" : "hidden"}>
+        <summary>attachments — ${d.atts.length} image(s) from this stem${dirty ? " · changed" : ""}</summary>
+        <div class="sub" style="margin:4px 0">Add, remove or retarget images for this
+          variant only; the stem's own set stays untouched. First / middle / last /
+          keyframe slots are single.</div>
+        ${attRows || '<div class="sub">no images attached</div>'}
+        <div class="row" style="gap:6px;margin-top:6px">
+          <select data-ev-addsel="${i}">${evImageOpts(d.images, null)}</select>
+          <button type="button" class="sec" data-ev-aadd="${i}">add image</button>
+          <span class="grow"></span>
+          <button type="button" class="sec" data-ev-areset="${i}" ${dirty ? "" : "disabled"}>reset to stem</button>
+        </div>
+      </details>
+      <label>Variant note — optional, shown on the tile and in History</label>
+      <textarea data-ev-dnote="${i}" style="min-height:44px" placeholder="why this variant / what to look for">${esc(d.note)}</textarea>
+    </div>`;
+  }).join("");
   $("evdraft").querySelectorAll("[data-ev-dprompt]").forEach(t => {
     t.oninput = () => { evDrafts[+t.dataset.evDprompt].prompt = t.value; };
   });
   $("evdraft").querySelectorAll("[data-ev-dconfig]").forEach(t => {
     t.oninput = () => { evDrafts[+t.dataset.evDconfig].config = t.value; };
   });
+  $("evdraft").querySelectorAll("[data-ev-dnote]").forEach(t => {
+    t.oninput = () => { evDrafts[+t.dataset.evDnote].note = t.value; };
+  });
   $("evdraft").querySelectorAll("[data-ev-ddel]").forEach(b => {
     b.onclick = () => { evDrafts.splice(+b.dataset.evDdel, 1); evRenderDrafts(); };
+  });
+  $("evdraft").querySelectorAll("[data-ev-afile]").forEach(el => {
+    el.onchange = () => {
+      const [i, j] = el.dataset.evAfile.split(":").map(Number);
+      evDrafts[i].atts[j].file = el.value;
+      evRenderDrafts();
+    };
+  });
+  $("evdraft").querySelectorAll("[data-ev-atarget]").forEach(el => {
+    el.onchange = () => {
+      const [i, j] = el.dataset.evAtarget.split(":").map(Number);
+      const a = evDrafts[i].atts[j];
+      a.target = el.value;
+      if (a.target === "ordered") a.order = a.order || 1;
+      if (a.target === "keyframe") a.index = a.index || 0;
+      evRenderDrafts();
+    };
+  });
+  $("evdraft").querySelectorAll("[data-ev-aorder]").forEach(el => {
+    el.oninput = () => {
+      const [i, j] = el.dataset.evAorder.split(":").map(Number);
+      evDrafts[i].atts[j].order = Math.max(1, +el.value || 1);
+    };
+  });
+  $("evdraft").querySelectorAll("[data-ev-aindex]").forEach(el => {
+    el.oninput = () => {
+      const [i, j] = el.dataset.evAindex.split(":").map(Number);
+      evDrafts[i].atts[j].index = Math.max(0, +el.value || 0);
+    };
+  });
+  $("evdraft").querySelectorAll("[data-ev-adel]").forEach(b => {
+    b.onclick = () => {
+      const [i, j] = b.dataset.evAdel.split(":").map(Number);
+      evDrafts[i].atts.splice(j, 1);
+      evRenderDrafts();
+    };
+  });
+  $("evdraft").querySelectorAll("[data-ev-aadd]").forEach(b => {
+    b.onclick = () => {
+      const i = +b.dataset.evAadd;
+      const sel = $("evdraft").querySelector(`[data-ev-addsel="${i}"]`);
+      if (!sel || !sel.value) return;
+      const d = evDrafts[i];
+      const nxt = Math.max(0, ...d.atts.filter(a => a.target === "ordered")
+        .map(a => +a.order || 0)) + 1;
+      d.atts.push({file: sel.value, target: "ordered", order: nxt});
+      evRenderDrafts();
+    };
+  });
+  $("evdraft").querySelectorAll("[data-ev-areset]").forEach(b => {
+    b.onclick = () => {
+      const d = evDrafts[+b.dataset.evAreset];
+      d.atts = JSON.parse(d.baseAtts);
+      evRenderDrafts();
+    };
   });
 }
 
@@ -1827,7 +1962,10 @@ $("evqbtn").onclick = async () => {
         if (!cfg || typeof cfg !== "object" || Array.isArray(cfg))
           throw new Error(`seed ${d.seed}: config must be a JSON object`);
       }
-      return {seed: d.seed, prompt, config: cfg};
+      const attsChanged = JSON.stringify(d.atts) !== d.baseAtts;
+      return {seed: d.seed, prompt, config: cfg,
+              attachments: attsChanged ? d.atts : undefined,
+              note: d.note.trim() || undefined};
     });
   } catch (err) { return evMsg(err.message, true); }
   try {
@@ -1836,6 +1974,8 @@ $("evqbtn").onclick = async () => {
       const body = {seeds: [r.seed]};
       if (r.prompt) body.prompt = r.prompt;
       if (r.config) body.config = r.config;
+      if (r.attachments !== undefined) body.attachments = r.attachments;
+      if (r.note) body.note = r.note;
       last = await api(
         `/api/e1/release/${evRid}/segments/${evData.cursor}/variants`,
         {method:"POST", headers:{"Content-Type":"application/json"},
@@ -1895,6 +2035,8 @@ function evRender() {
   const d = evData;
   $("evstemcard").hidden = !d;
   if (!d) return;
+  $("evallow").checked = !!d.allow_unsupported;
+  $("evallow").disabled = d.status !== "active";
   $("evhead").innerHTML = `<b>${esc(d.batch)}</b> · release ${esc(d.rid)} ·
     ${esc(d.mode)} · stem ${Math.min(d.cursor + 1, d.stems.length)}/${d.stems.length} ·
     ${esc(d.status)}`;
@@ -1922,11 +2064,14 @@ function evRender() {
         ${v.rating !== null && v.rating !== undefined ? `<span class="sub">rating ${v.rating}</span>` : ""}
         ${v.prompt_override ? '<span class="badge" title="prompt overridden for this variant">✎ prompt</span>' : ""}
         ${v.config_override && v.config_override.length ? `<span class="badge" title="config keys: ${esc(v.config_override.join(", "))}">⚙ ${esc(v.config_override.join(", "))}</span>` : ""}
+        ${v.attachment_override ? '<span class="badge" title="this variant uses its own attachment set">✎ attachments</span>' : ""}
+        ${v.warnings && v.warnings.length ? `<span class="badge st-bad" title="${esc(v.warnings.join(" · "))}">⚠ ${v.warnings.length}</span>` : ""}
         ${v.pick ? '<span class="badge done">★ picked</span>' : ""}
         <span class="grow"></span>
         <button type="button" class="sec" data-ev-pick="${esc(v.jid || "")}"
                 ${v.done ? "" : "disabled"}>use this variant</button>
       </div>
+      ${v.note ? `<div class="sub" style="margin-top:4px">${esc(v.note)}</div>` : ""}
       ${v.url ? `<video src="${esc(v.url)}" controls preload="metadata"
                         style="width:100%;max-height:300px;border-radius:6px;margin-top:6px"></video>` : ""}
       <div class="row" style="gap:4px;margin-top:6px"><span class="sub">rate:</span>${rateBtns}</div>

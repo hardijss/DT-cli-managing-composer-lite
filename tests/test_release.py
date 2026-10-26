@@ -103,7 +103,8 @@ class ReleaseBase(unittest.TestCase):
 class ReleaseTests(ReleaseBase):
     def test_schema_columns_and_table(self):
         cols = {r["name"] for r in self.con.execute("PRAGMA table_info(jobs)")}
-        for c in ("vg", "rseg", "pick", "rating", "release", "chain_src"):
+        for c in ("vg", "rseg", "pick", "rating", "release", "chain_src",
+                  "caps_override", "variant_meta"):
             self.assertIn(c, cols)
         self.con.execute("SELECT id, state, plan FROM releases").fetchall()
 
@@ -201,6 +202,94 @@ class ReleaseTests(ReleaseBase):
                "local_dir": str(self.tmp)}
         note = ltxq.resolve_chain(self.con, job)
         self.assertIn("chain_src unavailable", note)
+
+    def test_create_release_copies_unattached_images(self):
+        d = self.segdir(images={"f-0001.png": b"x", "extra.png": b"y"})
+        rid, _ = self.release(d)
+        s = ltxq.release_summary(self.con, rid)
+        self.assertEqual(s["stems"][0]["images"], ["extra.png", "f-0001.png"])
+        self.assertEqual(s["stems"][0]["attachments"],
+                         [{"file": "f-0001.png", "target": "ordered",
+                           "order": 1}])
+        frozen = json.loads(self.con.execute(
+            "SELECT plan FROM releases WHERE id=?", (rid,)).fetchone()["plan"])
+        fdir = Path(frozen["segments"][0]["dir"])
+        self.assertTrue((fdir / "extra.png").exists())
+
+    def test_variant_attachment_validation(self):
+        d = self.segdir(images={"f-0001.png": b"x", "alt.png": b"y"})
+        rid, _ = self.release(d)
+        with self.assertRaises(ValueError):
+            ltxq.release_variants(self.con, self.c, rid, 0, [1],
+                                  attachments=[{"file": "nope.png",
+                                                "target": "first"}])
+        with self.assertRaises(ValueError):
+            ltxq.release_variants(self.con, self.c, rid, 0, [1],
+                                  attachments=[
+                                      {"file": "f-0001.png", "target": "first"},
+                                      {"file": "alt.png", "target": "first"}])
+
+    def test_variant_attachments_ff_wins_and_chain(self):
+        d = self.segdir(images={"f-0001.png": b"x", "f-0002.png": b"y",
+                                "alt.png": b"z"})
+        rid, _ = self.release(d, chain=True)
+        ltxq.release_variants(self.con, self.c, rid, 0, [11])
+        j0 = self.jobs()[0]
+        self.job_status(j0["id"])
+        ltxq.release_tick(self.con, self.c)
+        ltxq.release_pick(self.con, self.c, rid, 0, j0["id"])
+        ltxq.release_next(self.con, rid)
+        ltxq.release_variants(self.con, self.c, rid, 1, [33],
+                              attachments=[{"file": "alt.png",
+                                            "target": "first"}],
+                              note="own first frame")
+        row = self.jobs()[-1]
+        self.assertIsNone(row["chain"])          # FF-wins per variant
+        self.assertIsNone(row["chain_src"])
+        names = [r["file"] for r in json.loads(row["assets"])]
+        self.assertIn("alt.png", names)
+        meta = json.loads(row["variant_meta"])
+        self.assertTrue(meta["attachments_override"])
+        self.assertEqual(meta["note"], "own first frame")
+
+    def test_caps_override_routes_to_incapable_host(self):
+        d = self.segdir(images={"f-0001.png": b"x", "f-0002.png": b"y"})
+        rid, _ = self.release(d)
+        ltxq.release_allow_unsupported(self.con, rid, True)
+        ltxq.release_variants(self.con, self.c, rid, 0, [5],
+                              attachments=[
+                                  {"file": "f-0001.png", "target": "ordered",
+                                   "order": 1},
+                                  {"file": "f-0002.png", "target": "ordered",
+                                   "order": 2}])
+        row = self.jobs()[-1]
+        self.assertEqual(row["caps_override"], 1)
+        self.assertTrue(json.loads(row["variant_meta"])["warnings"])
+        h = self.con.execute("SELECT * FROM hosts WHERE alias='dt-main'"
+                             ).fetchone()
+        got = ltxq.next_dispatchable_job(self.con, "dt-main", self.c, h)
+        self.assertEqual(got["id"], row["id"])   # override: not routed away
+        self.con.execute("UPDATE jobs SET caps_override=0 WHERE id=?",
+                         (row["id"],))
+        self.con.commit()
+        self.assertIsNone(ltxq.next_dispatchable_job(self.con, "dt-main",
+                                                     self.c, h))
+
+    def test_allow_unsupported_gate_at_variants_post(self):
+        d = self.segdir(images={"f-0001.png": b"x", "f-0002.png": b"y"})
+        rid, _ = self.release(d)
+        atts = [{"file": "f-0001.png", "target": "ordered", "order": 1},
+                {"file": "f-0002.png", "target": "ordered", "order": 2}]
+        with self.assertRaises(ValueError):
+            ltxq.release_variants(self.con, self.c, rid, 0, [5],
+                                  attachments=atts)
+        ltxq.release_allow_unsupported(self.con, rid, True)
+        s = ltxq.release_variants(self.con, self.c, rid, 0, [5],
+                                  attachments=atts)
+        v = s["stems"][0]["variants"][0]
+        self.assertTrue(v["attachment_override"])
+        self.assertTrue(v["warnings"])
+        self.assertTrue(s["allow_unsupported"])
 
     def test_abort_stops_scheduling(self):
         rid, _ = self.release(self.segdir())

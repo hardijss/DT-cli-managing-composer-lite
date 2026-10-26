@@ -37,7 +37,8 @@ NEXT_ONLY_IDS = {"panel-single", "panel-audio", "tab-single", "tab-audio",
                  "e1release", "tab-e1variant", "panel-e1variant", "evrid",
                  "evresume", "evmsg", "evhead", "evstems", "evstemcard",
                  "evcurname", "evseeds", "evgen", "evdraft", "evqbtn",
-                 "evqclear", "evtiles", "evnext", "evabort", "evstatus"}
+                 "evqclear", "evtiles", "evnext", "evabort", "evstatus",
+                 "evallow"}
 
 # A string that marks a feature both dashboards must expose.
 FEATURE_MARKERS = (
@@ -65,6 +66,7 @@ FEATURE_MARKERS = (
     'data-run="',                                   # ...and its hover/tint group key
     "total_gen_s",                                  # history time column: actual generation time
     'data-vg="',                                    # history variant groups (Idea 10)
+    "variant_meta",                                 # history: variant note/attachment badges
 )
 
 ID_RE = re.compile(r'id="([^"]+)"')

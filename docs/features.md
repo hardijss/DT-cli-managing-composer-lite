@@ -90,9 +90,11 @@
   before queueing. The basic audio-batch panel is untouched.
 - **E1 Variant panel** (`/next` tab, Idea 10): semi-interactive release over a
   validated E1 batch — one stem at a time; the seed list becomes editable
-  variant rows with optional per-variant prompt/config overrides; serial
-  variant jobs, inline video review, 0–5 ratings, "use this variant", then
-  "go and process next".
+  variant rows with optional per-variant prompt/config overrides, an
+  attachment editor (add / remove / retarget from the stem's images) and a
+  note; serial variant jobs, inline video review, 0–5 ratings, "use this
+  variant", then "go and process next". An "allow unsupported (warn)" switch
+  downgrades dialect refusals to warnings and marks the jobs `caps_override`.
   The pick feeds the next stem's continuity (`chain_src`); History groups
   variant rows behind sub-strips with ★ on the picked one.
 - **Pairs batch panel**: parse a stills folder (drop/pick or a server-side

@@ -186,6 +186,40 @@ class ReleaseApiTests(ReleaseApiBase):
         self.assertFalse(vs[102]["prompt_override"])
         self.assertEqual(vs[102]["config_override"], [])
 
+    def test_variant_attachments_and_override(self):
+        payload = self.preview(segdir("r5", images=("f-0001.png", "alt.png")))
+        rid = self.release(payload["sid"])["rid"]
+        url = f"/api/e1/release/{rid}/segments/0/variants"
+        data = self.post(url, {"seeds": [201], "note": "pinned alt",
+                               "attachments": [{"file": "alt.png",
+                                                "target": "first"}]})
+        v = data["stems"][0]["variants"][0]
+        self.assertTrue(v["attachment_override"])
+        self.assertEqual(v["note"], "pinned alt")
+        self.assertEqual(data["stems"][0]["images"], ["alt.png", "f-0001.png"])
+        job = self.jobs_for(rid)[0]
+        meta = json.loads(job["variant_meta"])
+        self.assertEqual(meta["note"], "pinned alt")
+        self.assertTrue(meta["attachments_override"])
+        self.mark_done(v["jid"])
+        self.post(f"/api/e1/release/{rid}/tick")
+        # two ordered images on dtcustom: strict refusal first ...
+        atts = [{"file": "f-0001.png", "target": "ordered", "order": 1},
+                {"file": "alt.png", "target": "ordered", "order": 2}]
+        self.post(url, {"seeds": [202], "attachments": atts}, status=400)
+        # ... then a warned override after the release-level switch
+        data = self.post(f"/api/e1/release/{rid}/allow-unsupported",
+                         {"on": True})
+        self.assertTrue(data["allow_unsupported"])
+        data = self.post(url, {"seeds": [202], "attachments": atts,
+                               "note": "multi"})
+        v2 = [v for v in data["stems"][0]["variants"] if v["seed"] == 202][0]
+        self.assertTrue(v2["warnings"])
+        job2 = self.jobs_for(rid)[-1]
+        self.assertEqual(job2["caps_override"], 1)
+        imgs = [a for a in json.loads(job2["assets"]) if a["flag"] == "--image"]
+        self.assertEqual(len(imgs), 2)
+
     def test_auto_mode_is_classic_queue(self):
         before = self.con.execute(
             "SELECT COUNT(*) FROM releases").fetchone()[0]

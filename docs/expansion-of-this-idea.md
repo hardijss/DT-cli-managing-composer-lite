@@ -1007,6 +1007,51 @@ POST /api/e1/release/<rid>/abort | /finish
 - **Variant dimensions**: seed list + per-variant **prompt** and **config**
   overrides, editable per variant row; no matrix generation.
 
+
+### Increment — per-variant attachments (shipped 2026-10-22)
+
+While preparing variants for a stem, each row can now add / remove / replace
+images instead of only inheriting the stem's attachment set. The editor
+assigns from the **stem's existing images** (image + target dropdowns per
+slot); a dropzone-extended shared image pool is explicitly deferred (see the
+candidate backlog).
+
+- **Images**: release creation copies *all* images of the stem folder into
+  `jobs/_releases/<rid>/segments/<n>/`, and `release_summary` exposes the
+  current stem's `images`, its base `attachments`, and the release's
+  `allow_unsupported` flag. No new files can be added here yet.
+- **Variant def**: optional `attachments` override (E1 chip shape) + optional
+  `note`, both stored in `release.state`. `variants` POST validates through
+  `_e1_edit_attachments` + `_e1_layout` (hard errors: unknown image, bad
+  target/order, duplicate slots) and compiles a variant copy against the
+  release's single dialect.
+- **Job creation**: `_release_start_variant` compiles the variant's own
+  attachment set and recomputes the chain slot / FF-wins rule per variant — a
+  variant pinning its own first frame gets no `chain_src`. Jobs carry
+  `variant_meta` (note / attachment-override flag / warnings) for History and
+  audit; `chain_src` still comes from the previous stem's pick.
+- **Marks & logs**: tiles show "✎ attachments", the variant note and a ⚠
+  warning chip; History rows show `✎ att` / `note` / `⚠ N` badges from
+  `variant_meta`. The full spec (seed, prompt, config, attachments, note)
+  stays in `release.state` as the research record.
+- **Dialect drift and override**: without the switch, unsupported compiles
+  stay hard errors. With the per-release "allow unsupported (warn)" switch
+  (`POST /api/e1/release/<rid>/allow-unsupported`), the strict errors become
+  per-variant `warnings` and `_e1_compile(..., allow_multi=True)` emits
+  multiple dtcustom `--image` positionals instead of collapsing them; jobs
+  get `caps_override=1`, `next_dispatchable_job` no longer routes them away,
+  and `launch` turns the capability refusal into a chained warning note.
+  Structural errors (a first-frame/ordered collision, duplicates) remain hard
+  errors — the override covers rulebook lag, not ambiguous layouts.
+- **Schema**: additive `jobs.caps_override` and `jobs.variant_meta` columns
+  (migrations); variant defs remain in `release.state`.
+- **Delivered**: `ltxq.py` (compile override, validation, job creation,
+  summary, allow-unsupported setter, gate/routing), `server.py` (attachments
+  + note on `variants`, allow-unsupported endpoint), `static/index-next.html`
+  (per-row attachment editor + note, release switch, tile badges),
+  `static/index.html` + `index-next.html` (History badges), tests
+  (`test_release.py` 12, `test_release_api.py` 5), suite 180 tests green.
+
 ---
 
 ## Idea 11 — Reprocess from a selected stem (downstream waterfall)
@@ -1233,3 +1278,6 @@ machine running ltxq — and reopened as the same project.
 - **Idea 5 — Per-segment prompt scripting**: derive per-segment prompts from
   timing/lyrics/section data instead of one shared prompt (the scripted,
   non-LLM cousin of Idea 2's prompt factory).
+- **Stem image pool for variants**: dropzone-extended shared image pool
+  per stem (or per release) so per-variant attachment edits could use newly
+  added images; evaluate after the per-variant attachment increment lands.

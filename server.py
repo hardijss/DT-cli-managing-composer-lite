@@ -1074,9 +1074,16 @@ def api_release_variants(rid, n):
     cfg = body.get("config")
     if cfg is not None and not isinstance(cfg, dict):
         return flask.jsonify(error="config must be an object"), 400
+    atts = body.get("attachments")
+    if atts is not None and not isinstance(atts, list):
+        return flask.jsonify(error="attachments must be a list or null"), 400
+    note = body.get("note")
+    if note is not None and not isinstance(note, str):
+        return flask.jsonify(error="note must be a string"), 400
     c, con = ltxq.conf(), ltxq.db()
     try:
-        data = ltxq.release_variants(con, c, rid, n, seeds, prompt, cfg)
+        data = ltxq.release_variants(con, c, rid, n, seeds, prompt, cfg,
+                                     attachments=atts, note=note)
         for stem in data["stems"]:
             for v in stem["variants"]:
                 if v.get("jid"):
@@ -1121,6 +1128,19 @@ def api_release_next(rid):
     c, con = ltxq.conf(), ltxq.db()
     try:
         return flask.jsonify(**ltxq.release_next(con, rid))
+    except ValueError as e:
+        return flask.jsonify(error=str(e)), 400
+    finally:
+        con.close()
+
+
+@app.post("/api/e1/release/<rid>/allow-unsupported")
+def api_release_allow_unsupported(rid):
+    body = flask.request.get_json(silent=True) or {}
+    c, con = ltxq.conf(), ltxq.db()
+    try:
+        return flask.jsonify(**ltxq.release_allow_unsupported(
+            con, rid, bool(body.get("on"))))
     except ValueError as e:
         return flask.jsonify(error=str(e)), 400
     finally:
